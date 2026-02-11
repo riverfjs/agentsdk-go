@@ -14,6 +14,7 @@ import (
 	"github.com/cexll/agentsdk-go/pkg/config"
 	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
 	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
+	"github.com/cexll/agentsdk-go/pkg/logger"
 	"github.com/cexll/agentsdk-go/pkg/message"
 	"github.com/cexll/agentsdk-go/pkg/model"
 	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
@@ -456,7 +457,7 @@ func TestRegisterToolsFiltersDisallowedTools(t *testing.T) {
 		Tools:           []tool.Tool{allowed, blocked},
 		DisallowedTools: []string{"FAIL"},
 	}
-	if _, err := registerTools(reg, opts, nil, nil, nil); err != nil {
+	if _, err := registerTools(reg, opts, nil, nil, nil, logger.NewDefault()); err != nil {
 		t.Fatalf("register tools: %v", err)
 	}
 	if _, err := reg.Get(allowed.Name()); err != nil {

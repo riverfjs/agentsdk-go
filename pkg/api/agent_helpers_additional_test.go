@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/cexll/agentsdk-go/pkg/config"
+	"github.com/cexll/agentsdk-go/pkg/logger"
 	"github.com/cexll/agentsdk-go/pkg/model"
 	"github.com/cexll/agentsdk-go/pkg/runtime/subagents"
 	"github.com/cexll/agentsdk-go/pkg/sandbox"
@@ -79,7 +80,7 @@ func TestRegisterToolsDisallowedAndDuplicates(t *testing.T) {
 		},
 	}
 	settings := &config.Settings{DisallowedTools: []string{"bash"}}
-	taskTool, err := registerTools(reg, opts, settings, nil, nil)
+	taskTool, err := registerTools(reg, opts, settings, nil, nil, logger.NewDefault())
 	if err != nil {
 		t.Fatalf("register tools failed: %v", err)
 	}

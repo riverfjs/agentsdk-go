@@ -360,11 +360,33 @@ func convertMessagesToOpenAI(msgs []Message, defaults ...string) []openai.ChatCo
 		case "tool":
 			result = append(result, buildOpenAIToolResults(msg)...)
 		default: // user
+			// Build content parts (text + images)
+			var contentParts []openai.ChatCompletionContentPartUnionParam
+			
+			// Add text content if present
 			content := msg.Content
-			if strings.TrimSpace(content) == "" {
-				content = "."
+			if strings.TrimSpace(content) != "" {
+				contentParts = append(contentParts, openai.TextContentPart(content))
 			}
-			result = append(result, openai.UserMessage(content))
+			
+			// Add image attachments if present
+			for _, att := range msg.Attachments {
+				if att.Type == "image" && att.Data != "" {
+					imageURL := "data:" + att.MimeType + ";base64," + att.Data
+					contentParts = append(contentParts, openai.ImageContentPart(
+						openai.ChatCompletionContentPartImageImageURLParam{
+							URL: imageURL,
+						},
+					))
+				}
+			}
+			
+			// If no content at all, add placeholder
+			if len(contentParts) == 0 {
+				contentParts = append(contentParts, openai.TextContentPart("."))
+			}
+			
+			result = append(result, openai.UserMessage(contentParts))
 		}
 	}
 

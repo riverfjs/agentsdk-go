@@ -10,6 +10,7 @@ import (
 
 	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
 	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
+	"github.com/cexll/agentsdk-go/pkg/logger"
 	"github.com/cexll/agentsdk-go/pkg/message"
 	"github.com/cexll/agentsdk-go/pkg/model"
 )
@@ -62,7 +63,7 @@ func TestCompactor_CompactFlow(t *testing.T) {
 	hist.Append(msgWithTokens("assistant", 20))
 
 	mdl := &summaryModel{content: "summary"}
-	comp := newCompactor("", CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1}, mdl, 10, nil)
+	comp := newCompactor("", CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1}, mdl, 10, nil, logger.NewDefault())
 	res, ok, err := comp.maybeCompact(context.Background(), hist, "sess", nil)
 	if err != nil || !ok || res.summary == "" {
 		t.Fatalf("unexpected result ok=%v err=%v res=%+v", ok, err, res)
@@ -88,7 +89,7 @@ func TestCompactor_HookDenySkips(t *testing.T) {
 	exec := corehooks.NewExecutor()
 	exec.Register(corehooks.ShellHook{Event: coreevents.PreCompact, Command: `printf '{"continue":false}'`})
 
-	comp := newCompactor("", CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1}, &summaryModel{content: "x"}, 10, exec)
+	comp := newCompactor("", CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1}, &summaryModel{content: "x"}, 10, exec, logger.NewDefault())
 	_, ok, err := comp.maybeCompact(context.Background(), hist, "sess", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -105,7 +106,7 @@ func TestCompactor_PersistsRolloutEvent(t *testing.T) {
 	hist.Append(msgWithTokens("assistant", 20))
 	hist.Append(msgWithTokens("user", 20))
 
-	comp := newCompactor(root, CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1, RolloutDir: "rollout"}, &summaryModel{content: "sum"}, 10, nil)
+	comp := newCompactor(root, CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1, RolloutDir: "rollout"}, &summaryModel{content: "sum"}, 10, nil, logger.NewDefault())
 	_, ok, err := comp.maybeCompact(context.Background(), hist, "sess", nil)
 	if err != nil || !ok {
 		t.Fatalf("expected compaction, ok=%v err=%v", ok, err)
@@ -261,7 +262,7 @@ func TestCompactor_HookAskSkips(t *testing.T) {
 	exec := corehooks.NewExecutor()
 	exec.Register(corehooks.ShellHook{Event: coreevents.PreCompact, Command: `printf '{"continue":false}'`})
 
-	comp := newCompactor("", CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1}, &summaryModel{content: "x"}, 10, exec)
+	comp := newCompactor("", CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1}, &summaryModel{content: "x"}, 10, exec, logger.NewDefault())
 	_, ok, err := comp.maybeCompact(context.Background(), hist, "sess", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

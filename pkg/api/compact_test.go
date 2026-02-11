@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/cexll/agentsdk-go/pkg/logger"
 	"github.com/cexll/agentsdk-go/pkg/message"
 	"github.com/cexll/agentsdk-go/pkg/model"
 )
@@ -50,7 +51,7 @@ func TestCompactorMaybeCompact(t *testing.T) {
 	hist.Append(message.Message{Role: "assistant", Content: "two"})
 	hist.Append(message.Message{Role: "user", Content: "three"})
 
-	comp := newCompactor("", CompactConfig{Enabled: true, PreserveCount: 1, Threshold: 0.1}, &compactStubModel{resp: "summary"}, 1, nil)
+	comp := newCompactor("", CompactConfig{Enabled: true, PreserveCount: 1, Threshold: 0.1}, &compactStubModel{resp: "summary"}, 1, nil, logger.NewDefault())
 	if comp == nil {
 		t.Fatalf("expected compactor")
 	}

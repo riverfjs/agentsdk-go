@@ -279,6 +279,14 @@ type Request struct {
 	TargetSubagent    string
 	ToolWhitelist     []string
 	ForceSkills       []string
+	Attachments       []Attachment // Optional: images or files for multimodal requests
+}
+
+// Attachment represents a file attachment (e.g., image) for vision API
+type Attachment struct {
+	Type     string // "image" or "file"
+	FilePath string // Local file path
+	MimeType string // e.g., "image/jpeg", "image/png"
 }
 
 // Response aggregates the final agent result together with metadata emitted
@@ -291,6 +299,7 @@ type Response struct {
 	CommandResults []CommandExecution
 	Subagent       *subagents.Result
 	HookEvents     []coreevents.Event
+	Attachments    []ResponseAttachment // Files to send to user (images, documents, etc.)
 	// Deprecated: Use Settings instead. Kept for backward compatibility.
 	ProjectConfig   *config.Settings
 	Settings        *config.Settings

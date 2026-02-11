@@ -414,15 +414,37 @@ func convertMessages(msgs []Message, enableCache bool, defaults ...string) ([]an
 				Content: content,
 			})
 		default:
+			// User message - may include text and images
+			contentBlocks := []anthropicsdk.ContentBlockParamUnion{}
+			
+			// Add text content if present
 			content := msg.Content
-			if strings.TrimSpace(content) == "" {
-				content = "."
+			if strings.TrimSpace(content) != "" {
+				contentBlocks = append(contentBlocks, anthropicsdk.NewTextBlock(content))
 			}
+			
+			// Add image attachments if present
+			for _, att := range msg.Attachments {
+				if att.Type == "image" && att.Data != "" {
+					mediaType := anthropicsdk.Base64ImageSourceMediaType(att.MimeType)
+					imageSource := anthropicsdk.Base64ImageSourceParam{
+						Type:      "base64",
+						MediaType: mediaType,
+						Data:      att.Data,
+					}
+					imageBlock := anthropicsdk.NewImageBlock(imageSource)
+					contentBlocks = append(contentBlocks, imageBlock)
+				}
+			}
+			
+			// Ensure at least one content block
+			if len(contentBlocks) == 0 {
+				contentBlocks = append(contentBlocks, anthropicsdk.NewTextBlock("."))
+			}
+			
 			messageParams = append(messageParams, anthropicsdk.MessageParam{
-				Role: anthropicsdk.MessageParamRoleUser,
-				Content: []anthropicsdk.ContentBlockParamUnion{
-					anthropicsdk.NewTextBlock(content),
-				},
+				Role:    anthropicsdk.MessageParamRoleUser,
+				Content: contentBlocks,
 			})
 		}
 	}

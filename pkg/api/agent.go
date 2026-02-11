@@ -2,11 +2,13 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"maps"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -514,16 +516,17 @@ func (rt *Runtime) ClearSession(sessionID string) error {
 // ----------------- internal helpers -----------------
 
 type preparedRun struct {
-	ctx            context.Context
-	prompt         string
-	history        *message.History
-	normalized     Request
-	recorder       *hookRecorder
-	commandResults []CommandExecution
-	skillResults   []SkillExecution
-	subagentResult *subagents.Result
-	mode           ModeContext
-	toolWhitelist  map[string]struct{}
+	ctx             context.Context
+	prompt          string
+	history         *message.History
+	normalized      Request
+	recorder        *hookRecorder
+	commandResults  []CommandExecution
+	skillResults    []SkillExecution
+	subagentResult  *subagents.Result
+	mode            ModeContext
+	toolWhitelist   map[string]struct{}
+	attachments     []model.MessageAttachment // Images for vision API
 }
 
 type runResult struct {
@@ -550,6 +553,29 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 	// Auto-generate RequestID if not provided (UUID tracking)
 	if normalized.RequestID == "" {
 		normalized.RequestID = uuid.New().String()
+	}
+	
+	// Process attachments (convert to base64)
+	var msgAttachments []model.MessageAttachment
+	for _, att := range normalized.Attachments {
+		if att.FilePath == "" {
+			continue
+		}
+		data, mimeType, err := loadImageAsBase64(att.FilePath, att.MimeType)
+		if err != nil {
+			rt.logger.Warnf("failed to load attachment %s: %v", att.FilePath, err)
+			continue
+		}
+		msgAttachments = append(msgAttachments, model.MessageAttachment{
+			Type:       "image",
+			Data:       data,
+			MimeType:   mimeType,
+			SourceType: "base64",
+		})
+	}
+	
+	if len(msgAttachments) > 0 {
+		rt.logger.Debugf("loaded %d image attachment(s) for vision API", len(msgAttachments))
 	}
 
 	history := rt.histories.Get(normalized.SessionID)
@@ -594,6 +620,7 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 		subagentResult: subRes,
 		mode:           normalized.Mode,
 		toolWhitelist:  whitelist,
+		attachments:    msgAttachments,
 	}, nil
 }
 
@@ -639,6 +666,7 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		compactor:    rt.compactor,
 		sessionID:    prep.normalized.SessionID,
 		logger:       rt.logger,
+		attachments:  prep.attachments,
 	}
 
 	toolExec := &runtimeToolExecutor{
@@ -746,6 +774,10 @@ func (rt *Runtime) buildResponse(prep preparedRun, result runResult) *Response {
 	if prep.recorder != nil {
 		events = prep.recorder.Drain()
 	}
+	
+	// Extract attachments from tool results
+	attachments := rt.extractAttachments(events)
+	
 	resp := &Response{
 		Mode:            prep.mode,
 		RequestID:       prep.normalized.RequestID,
@@ -754,6 +786,7 @@ func (rt *Runtime) buildResponse(prep preparedRun, result runResult) *Response {
 		SkillResults:    prep.skillResults,
 		Subagent:        prep.subagentResult,
 		HookEvents:      events,
+		Attachments:     attachments,
 		ProjectConfig:   rt.Settings(),
 		Settings:        rt.Settings(),
 		SandboxSnapshot: rt.sandboxReport(),
@@ -1067,6 +1100,7 @@ type conversationModel struct {
 	compactor    *compactor
 	sessionID    string
 	logger       logger.Logger
+	attachments  []model.MessageAttachment // Images for vision API
 }
 
 func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*agent.ModelOutput, error) {
@@ -1075,11 +1109,17 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 	}
 
 	if strings.TrimSpace(m.prompt) != "" {
-		m.history.Append(message.Message{Role: "user", Content: strings.TrimSpace(m.prompt)})
+		userMsg := message.Message{
+			Role:        "user",
+			Content:     strings.TrimSpace(m.prompt),
+			Attachments: m.attachments,
+		}
+		m.history.Append(userMsg)
 		if err := m.hooks.UserPrompt(ctx, m.prompt); err != nil {
 			return nil, err
 		}
 		m.prompt = ""
+		m.attachments = nil // Clear after use
 	}
 
 	if m.compactor != nil {
@@ -1872,4 +1912,105 @@ func defaultSessionID(entry EntryPoint) string {
 		prefix = string(defaultEntrypoint)
 	}
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+}
+
+// loadImageAsBase64 loads an image file and returns base64-encoded data
+func loadImageAsBase64(filePath, mimeType string) (string, string, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", "", fmt.Errorf("read file: %w", err)
+	}
+	
+	// Auto-detect MIME type if not provided
+	if mimeType == "" {
+		ext := strings.ToLower(filepath.Ext(filePath))
+		switch ext {
+		case ".jpg", ".jpeg":
+			mimeType = "image/jpeg"
+		case ".png":
+			mimeType = "image/png"
+		case ".gif":
+			mimeType = "image/gif"
+		case ".webp":
+			mimeType = "image/webp"
+		default:
+			mimeType = "image/jpeg"
+		}
+	}
+	
+	encoded := base64.StdEncoding.EncodeToString(data)
+	return encoded, mimeType, nil
+}
+
+// extractAttachments scans HookEvents for tool results containing file attachments
+// (e.g., screenshots) and converts them into ResponseAttachment objects.
+func (rt *Runtime) extractAttachments(events []coreevents.Event) []ResponseAttachment {
+	var attachments []ResponseAttachment
+	
+	for _, event := range events {
+		if event.Type != coreevents.PostToolUse {
+			continue
+		}
+		
+		payload, ok := event.Payload.(coreevents.ToolResultPayload)
+		if !ok {
+			continue
+		}
+		
+		// Check if Result is a map containing structured data
+		resultMap, ok := payload.Result.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		
+		// Look for "path" field indicating a file attachment
+		pathStr, hasPath := resultMap["path"].(string)
+		if !hasPath || pathStr == "" {
+			continue
+		}
+		
+		// Determine attachment type from path or metadata
+		attType := AttachmentTypeFile
+		if strings.Contains(pathStr, "screenshot") || strings.HasSuffix(pathStr, ".png") || 
+		   strings.HasSuffix(pathStr, ".jpg") || strings.HasSuffix(pathStr, ".jpeg") {
+			attType = AttachmentTypeImage
+		}
+		
+		// Auto-detect MIME type
+		mimeType := ""
+		ext := strings.ToLower(filepath.Ext(pathStr))
+		switch ext {
+		case ".png":
+			mimeType = "image/png"
+		case ".jpg", ".jpeg":
+			mimeType = "image/jpeg"
+		case ".gif":
+			mimeType = "image/gif"
+		case ".webp":
+			mimeType = "image/webp"
+		case ".pdf":
+			mimeType = "application/pdf"
+		}
+		
+		// Extract metadata
+		metadata := make(map[string]interface{})
+		for k, v := range resultMap {
+			if k != "path" && k != "filename" {
+				metadata[k] = v
+			}
+		}
+		
+		attachment := ResponseAttachment{
+			Type:     attType,
+			Path:     pathStr,
+			MimeType: mimeType,
+			Source:   payload.Name, // Tool name (e.g., "Bash", "Skill")
+			Metadata: metadata,
+		}
+		
+		attachments = append(attachments, attachment)
+		rt.logger.Debugf("[api] Extracted attachment: %s (type=%s, source=%s)", pathStr, attType, payload.Name)
+	}
+	
+	return attachments
 }

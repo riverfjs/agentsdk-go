@@ -6,6 +6,7 @@ import (
 	"testing"
 	_ "unsafe"
 
+	"github.com/cexll/agentsdk-go/pkg/logger"
 	"github.com/cexll/agentsdk-go/pkg/mcp"
 	"github.com/cexll/agentsdk-go/pkg/tool"
 )
@@ -31,7 +32,7 @@ func TestRegisterMCPServersNotBlockedByBuiltinWhitelist(t *testing.T) {
 
 	reg := tool.NewRegistry()
 	// Builtins disabled; MCP should still attempt registration.
-	if _, err := registerTools(reg, Options{ProjectRoot: t.TempDir(), EnabledBuiltinTools: []string{}}, nil, nil, nil); err != nil {
+	if _, err := registerTools(reg, Options{ProjectRoot: t.TempDir(), EnabledBuiltinTools: []string{}}, nil, nil, nil, logger.NewDefault()); err != nil {
 		t.Fatalf("register tools: %v", err)
 	}
 

@@ -1,12 +1,15 @@
 package message
 
+import "github.com/cexll/agentsdk-go/pkg/model"
+
 // Message represents a single conversational turn used within the message
 // package. It is purposefully minimal to keep the history layer independent
 // from concrete model providers.
 type Message struct {
-	Role      string
-	Content   string
-	ToolCalls []ToolCall
+	Role        string
+	Content     string
+	ToolCalls   []ToolCall
+	Attachments []model.MessageAttachment // Images for vision API
 }
 
 // ToolCall mirrors the shape of a tool invocation produced by the assistant.
@@ -20,7 +23,11 @@ type ToolCall struct {
 // CloneMessage performs a deep clone of a model.Message, duplicating nested
 // maps to avoid mutation leaks between callers.
 func CloneMessage(msg Message) Message {
-	clone := Message{Role: msg.Role, Content: msg.Content}
+	clone := Message{
+		Role:        msg.Role,
+		Content:     msg.Content,
+		Attachments: msg.Attachments, // Shallow copy is fine for attachments
+	}
 	clone.ToolCalls = cloneToolCalls(msg.ToolCalls)
 	return clone
 }
