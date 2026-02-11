@@ -48,6 +48,23 @@ func (f *fileSandbox) resolvePath(raw interface{}) (string, error) {
 	if trimmed == "" {
 		return "", errors.New("path cannot be empty")
 	}
+	
+	// Expand ~ to home directory first
+	if strings.HasPrefix(trimmed, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot expand ~: %w", err)
+		}
+		if trimmed == "~" {
+			trimmed = home
+		} else if strings.HasPrefix(trimmed, "~/") {
+			trimmed = filepath.Join(home, trimmed[2:])
+		} else {
+			// Handle ~username format (less common)
+			trimmed = strings.Replace(trimmed, "~", home, 1)
+		}
+	}
+	
 	candidate := trimmed
 	if !filepath.IsAbs(candidate) {
 		candidate = filepath.Join(f.root, candidate)

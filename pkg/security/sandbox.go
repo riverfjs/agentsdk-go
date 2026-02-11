@@ -48,11 +48,13 @@ func NewSandbox(workDir string) *Sandbox {
 	}
 }
 
-// NewDisabledSandbox creates a sandbox that skips all validation.
-// Used when sandbox is explicitly disabled in configuration.
+// NewDisabledSandbox creates a sandbox that skips path validation but still enforces command safety.
+// Disabling sandbox means "allow access to full filesystem", not "allow dangerous commands".
 func NewDisabledSandbox() *Sandbox {
 	return &Sandbox{
-		disabled: true,
+		disabled:  true,
+		validator: NewValidator(), // Still validate dangerous commands!
+		resolver:  NewPathResolver(),
 	}
 }
 
@@ -111,11 +113,11 @@ func (s *Sandbox) ValidatePath(path string) error {
 }
 
 // ValidateCommand is the second defense line, preventing obviously dangerous commands.
+// Note: Command validation (rm -rf, etc.) is ALWAYS enforced, even when sandbox is disabled.
+// Only path validation respects the disabled flag.
 func (s *Sandbox) ValidateCommand(cmd string) error {
-	if s != nil && s.disabled {
-		return nil
-	}
-
+	// Always validate dangerous commands regardless of sandbox mode
+	// Sandbox disabled means "skip path restrictions", not "allow dangerous commands"
 	if err := s.validator.Validate(cmd); err != nil {
 		return fmt.Errorf("security: %w", err)
 	}

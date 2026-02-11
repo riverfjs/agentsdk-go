@@ -49,8 +49,9 @@ func NewValidator() *Validator {
 			"/dev/",
 			"../",
 		},
-		// bannedFragments 捕捉危险的删除模式，而不是彻底禁止 rm/rmdir
+		// bannedFragments 捕捉危险的删除模式，包括所有可能导致批量删除的命令
 		bannedFragments: []string{
+			// rm 系列
 			"-rf /",
 			"--no-preserve-root",
 			"--preserve-root=false",
@@ -61,6 +62,13 @@ func NewValidator() *Validator {
 			"rmdir -p",
 			"rm *",
 			"rm /",
+			// find 删除模式
+			"-delete",
+			"-exec rm",
+			"-exec del",
+			// 其他危险删除工具
+			"trash",
+			"gio trash",
 		},
 		maxCommandBytes: 4096,
 		maxArgs:         64,

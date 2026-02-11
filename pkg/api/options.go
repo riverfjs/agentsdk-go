@@ -16,6 +16,7 @@ import (
 	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
 	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
 	coremw "github.com/cexll/agentsdk-go/pkg/core/middleware"
+	"github.com/cexll/agentsdk-go/pkg/logger"
 	"github.com/cexll/agentsdk-go/pkg/middleware"
 	"github.com/cexll/agentsdk-go/pkg/model"
 	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
@@ -185,6 +186,11 @@ type Options struct {
 	TokenLimit        int
 	MaxSessions       int
 
+	// ErrorGuard configuration for automatic error detection and intervention
+	ErrorGuardEnabled   *bool    // nil = enabled (default), false = disabled
+	ErrorGuardThreshold int      // Consecutive errors before intervention (default: 2)
+	ErrorGuardMarkers   []string // Custom error detection patterns
+
 	Tools []tool.Tool
 
 	// EnabledBuiltinTools controls which built-in tools are registered when Options.Tools is empty.
@@ -241,6 +247,10 @@ type Options struct {
 	// OTEL configures OpenTelemetry distributed tracing.
 	// Requires build tag 'otel' for actual instrumentation; otherwise no-op.
 	OTEL OTELConfig
+
+	// Logger 自定义日志记录器。如果为 nil，使用默认的控制台 logger。
+	// 调用方可以注入自己的 logger.Logger 来控制日志输出和格式。
+	Logger logger.Logger
 
 	fsLayer *config.FS
 }
@@ -481,6 +491,10 @@ func (o Options) frozen() Options {
 	}
 	if len(o.SubagentModelMapping) > 0 {
 		o.SubagentModelMapping = maps.Clone(o.SubagentModelMapping)
+	}
+
+	if len(o.ErrorGuardMarkers) > 0 {
+		o.ErrorGuardMarkers = append([]string(nil), o.ErrorGuardMarkers...)
 	}
 
 	return o

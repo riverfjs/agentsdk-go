@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
 
 	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
 	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
+	"github.com/cexll/agentsdk-go/pkg/logger"
 	"github.com/cexll/agentsdk-go/pkg/message"
 	"github.com/cexll/agentsdk-go/pkg/model"
 )
@@ -83,10 +83,11 @@ type compactor struct {
 	limit   int
 	hooks   *corehooks.Executor
 	rollout *RolloutWriter
+	logger  logger.Logger
 	mu      sync.Mutex
 }
 
-func newCompactor(projectRoot string, cfg CompactConfig, mdl model.Model, tokenLimit int, hooks *corehooks.Executor) *compactor {
+func newCompactor(projectRoot string, cfg CompactConfig, mdl model.Model, tokenLimit int, hooks *corehooks.Executor, log logger.Logger) *compactor {
 	cfg = cfg.withDefaults()
 	if !cfg.Enabled {
 		return nil
@@ -102,6 +103,7 @@ func newCompactor(projectRoot string, cfg CompactConfig, mdl model.Model, tokenL
 		limit:   limit,
 		hooks:   hooks,
 		rollout: rollout,
+		logger:  log,
 	}
 }
 
@@ -215,7 +217,9 @@ func (c *compactor) postCompact(sessionID string, res compactResult, recorder *h
 	c.record(recorder, evt)
 	if c.rollout != nil {
 		if err := c.rollout.WriteCompactEvent(sessionID, res); err != nil {
-			log.Printf("api: write compaction rollout: %v", err)
+			if c.logger != nil {
+				c.logger.Warnf("api: write compaction rollout: %v", err)
+			}
 		}
 	}
 }
@@ -371,8 +375,8 @@ func (c *compactor) completeSummary(ctx context.Context, req model.Request) (*mo
 			err = errors.New("api: compact summary returned no final response")
 		}
 		lastErr = err
-		if attempts > 1 {
-			log.Printf("api: compact summary attempt %d/%d failed: %v", attempt, attempts, err)
+		if attempts > 1 && c.logger != nil {
+			c.logger.Warnf("api: compact summary attempt %d/%d failed: %v", attempt, attempts, err)
 		}
 	}
 	return nil, lastErr

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cexll/agentsdk-go/pkg/logger"
 	"github.com/cexll/agentsdk-go/pkg/sandbox"
 	"github.com/cexll/agentsdk-go/pkg/security"
 )
@@ -19,6 +20,7 @@ type Executor struct {
 	sandbox   *sandbox.Manager
 	persister *OutputPersister
 	permCheck PermissionResolver
+	logger    logger.Logger
 }
 
 // NewExecutor constructs an executor backed by the provided registry. When
@@ -28,7 +30,11 @@ func NewExecutor(registry *Registry, sb *sandbox.Manager) *Executor {
 	if registry == nil {
 		registry = NewRegistry()
 	}
-	return &Executor{registry: registry, sandbox: sb}
+	return &Executor{
+		registry: registry,
+		sandbox:  sb,
+		logger:   logger.NewDefault(), // 使用默认 logger
+	}
 }
 
 // Registry exposes the underlying registry primarily for tests.
@@ -72,6 +78,22 @@ func (e *Executor) Execute(ctx context.Context, call Call) (*CallResult, error) 
 
 	params := call.cloneParams()
 	started := time.Now()
+	
+	// Log tool execution start with key parameters (lightweight formatting)
+	if e.logger != nil {
+		// For Bash/command tools, show the command; otherwise show concise params
+		paramStr := ""
+		if cmd, ok := params["command"].(string); ok {
+			paramStr = cmd
+		} else {
+			paramStr = fmt.Sprintf("%v", params)
+		}
+		if len(paramStr) > 200 {
+			paramStr = paramStr[:200] + "..."
+		}
+		e.logger.Infof("[tool] %s(%s)", call.Name, paramStr)
+	}
+	
 	var (
 		res     *ToolResult
 		execErr error
@@ -81,6 +103,20 @@ func (e *Executor) Execute(ctx context.Context, call Call) (*CallResult, error) 
 	} else {
 		res, execErr = tool.Execute(ctx, params)
 	}
+	
+	// Log tool execution result
+	if e.logger != nil {
+		if execErr != nil {
+			e.logger.Warnf("[tool] %s ✗ %v", call.Name, execErr)
+		} else if res != nil && res.Output != "" {
+			output := strings.ReplaceAll(res.Output, "\n", " ")
+			if len(output) > 200 {
+				output = output[:200] + "..."
+			}
+			e.logger.Infof("[tool] %s ✓ %s", call.Name, output)
+		}
+	}
+	
 	if e.persister != nil && res != nil {
 		// MaybePersist errors are logged internally; ignore return value
 		e.persister.MaybePersist(call, res) //nolint:errcheck
@@ -93,6 +129,23 @@ func (e *Executor) Execute(ctx context.Context, call Call) (*CallResult, error) 
 		CompletedAt: time.Now(),
 	}
 	return cr, execErr
+}
+
+// truncateParams truncates parameter map for logging
+func truncateParams(params map[string]interface{}, maxLen int) string {
+	if len(params) == 0 {
+		return "{}"
+	}
+	str := fmt.Sprintf("%v", params)
+	return truncateString(str, maxLen)
+}
+
+// truncateString truncates a string for logging
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // ExecuteAll runs the provided calls concurrently and preserves ordering in the
@@ -161,6 +214,18 @@ func (e *Executor) WithOutputPersister(persister *OutputPersister) *Executor {
 	}
 	clone := *e
 	clone.persister = persister
+	return &clone
+}
+
+// WithLogger returns a shallow copy using the provided logger.
+func (e *Executor) WithLogger(log logger.Logger) *Executor {
+	if e == nil {
+		exec := NewExecutor(nil, nil)
+		exec.logger = log
+		return exec
+	}
+	clone := *e
+	clone.logger = log
 	return &clone
 }
 

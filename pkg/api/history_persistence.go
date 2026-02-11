@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,6 +173,6 @@ func (rt *Runtime) persistHistory(sessionID string, history *message.History) {
 		return
 	}
 	if err := rt.historyPersister.Save(sessionID, snapshot); err != nil {
-		log.Printf("api: persist history %q: %v", sessionID, err)
+		rt.logger.Warnf("api: persist history %q: %v", sessionID, err)
 	}
 }

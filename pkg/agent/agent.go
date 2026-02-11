@@ -145,45 +145,62 @@ func (a *Agent) Run(ctx context.Context, c *Context) (*ModelOutput, error) {
 			return out, nil
 		}
 
-		var firstMiddlewareErr error
+	var firstMiddlewareErr error
+	shouldStopAfterTools := false
 
-		for _, call := range out.ToolCalls {
-			state.ToolCall = call
-			if err := a.mw.Execute(ctx, middleware.StageBeforeTool, state); err != nil && firstMiddlewareErr == nil {
-				firstMiddlewareErr = err
+	for _, call := range out.ToolCalls {
+		state.ToolCall = call
+		if err := a.mw.Execute(ctx, middleware.StageBeforeTool, state); err != nil && firstMiddlewareErr == nil {
+			firstMiddlewareErr = err
+		}
+
+		if a.tools == nil {
+			return last, fmt.Errorf("tool executor is nil for call %s", call.Name)
+		}
+
+		res, err := a.tools.Execute(ctx, call, c)
+		if err != nil {
+			if res.Name == "" {
+				res.Name = call.Name
 			}
-
-			if a.tools == nil {
-				return last, fmt.Errorf("tool executor is nil for call %s", call.Name)
+			if res.Metadata == nil {
+				res.Metadata = map[string]any{}
 			}
-
-			res, err := a.tools.Execute(ctx, call, c)
-			if err != nil {
-				if res.Name == "" {
-					res.Name = call.Name
-				}
-				if res.Metadata == nil {
-					res.Metadata = map[string]any{}
-				}
-				res.Metadata["is_error"] = true
-				res.Metadata["error"] = err.Error()
-				if res.Output == "" {
-					res.Output = fmt.Sprintf("Tool execution failed: %v", err)
-				}
-			}
-
-			c.ToolResults = append(c.ToolResults, res)
-			state.ToolResult = res
-
-			if err := a.mw.Execute(ctx, middleware.StageAfterTool, state); err != nil && firstMiddlewareErr == nil {
-				firstMiddlewareErr = err
+			res.Metadata["is_error"] = true
+			res.Metadata["error"] = err.Error()
+			if res.Output == "" {
+				res.Output = fmt.Sprintf("Tool execution failed: %v", err)
 			}
 		}
 
-		if firstMiddlewareErr != nil {
-			return last, firstMiddlewareErr
+		c.ToolResults = append(c.ToolResults, res)
+		state.ToolResult = res
+
+		if err := a.mw.Execute(ctx, middleware.StageAfterTool, state); err != nil && firstMiddlewareErr == nil {
+			firstMiddlewareErr = err
 		}
 
-		iteration++
+		// If AskUserQuestion was called, stop executing remaining tools in this iteration
+		// and return control to the user for input
+		if call.Name == "AskUserQuestion" || call.Name == "ask_user_question" {
+			shouldStopAfterTools = true
+			break
+		}
+	}
+
+	if firstMiddlewareErr != nil {
+		return last, firstMiddlewareErr
+	}
+
+	// If AskUserQuestion was called, return immediately without continuing the agent loop
+	// The user needs to provide input before the agent can continue
+	if shouldStopAfterTools {
+		if err := a.mw.Execute(ctx, middleware.StageAfterAgent, state); err != nil {
+			return last, err
+		}
+		return last, nil
+	}
+
+	iteration++
 	}
 }

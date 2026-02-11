@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"maps"
 	"net/url"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -16,6 +16,7 @@ import (
 	"github.com/cexll/agentsdk-go/pkg/config"
 	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
 	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
+	"github.com/cexll/agentsdk-go/pkg/logger"
 	"github.com/cexll/agentsdk-go/pkg/message"
 	"github.com/cexll/agentsdk-go/pkg/middleware"
 	"github.com/cexll/agentsdk-go/pkg/model"
@@ -80,6 +81,7 @@ type Runtime struct {
 	tokens    *tokenTracker
 	compactor *compactor
 	tracer    Tracer
+	logger    logger.Logger
 
 	mu sync.RWMutex
 
@@ -96,16 +98,22 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	opts = opts.frozen()
 	mode := opts.modeContext()
 
+	// 初始化 logger，如果未提供则使用默认
+	log := opts.Logger
+	if log == nil {
+		log = logger.NewDefault()
+	}
+
 	// 初始化文件系统抽象层
 	fsLayer := config.NewFS(opts.ProjectRoot, opts.EmbedFS)
 	opts.fsLayer = fsLayer
 
 	if err := materializeEmbeddedClaudeHooks(opts.ProjectRoot, opts.EmbedFS); err != nil {
-		log.Printf("claude hooks materializer warning: %v", err)
+		log.Warnf("claude hooks materializer warning: %v", err)
 	}
 
 	if memory, err := config.LoadClaudeMD(opts.ProjectRoot, fsLayer); err != nil {
-		log.Printf("claude.md loader warning: %v", err)
+		log.Warnf("claude.md loader warning: %v", err)
 	} else if strings.TrimSpace(memory) != "" {
 		if strings.TrimSpace(opts.SystemPrompt) == "" {
 			opts.SystemPrompt = fmt.Sprintf("## Memory\n\n%s", strings.TrimSpace(memory))
@@ -129,23 +137,23 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	cmdExec, cmdErrs := buildCommandsExecutor(opts)
 	if len(cmdErrs) > 0 {
 		for _, err := range cmdErrs {
-			log.Printf("command loader warning: %v", err)
+			log.Warnf("command loader warning: %v", err)
 		}
 	}
 	skReg, skErrs := buildSkillsRegistry(opts)
 	if len(skErrs) > 0 {
 		for _, err := range skErrs {
-			log.Printf("skill loader warning: %v", err)
+			log.Warnf("skill loader warning: %v", err)
 		}
 	}
 	subMgr, subErrs := buildSubagentsManager(opts)
 	if len(subErrs) > 0 {
 		for _, err := range subErrs {
-			log.Printf("subagent loader warning: %v", err)
+			log.Warnf("subagent loader warning: %v", err)
 		}
 	}
 	registry := tool.NewRegistry()
-	taskTool, err := registerTools(registry, opts, settings, skReg, cmdExec)
+	taskTool, err := registerTools(registry, opts, settings, skReg, cmdExec, log)
 	if err != nil {
 		return nil, err
 	}
@@ -153,11 +161,13 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	if err := registerMCPServers(ctx, registry, sbox, mcpServers); err != nil {
 		return nil, err
 	}
-	executor := tool.NewExecutor(registry, sbox).WithOutputPersister(tool.NewOutputPersister())
+	executor := tool.NewExecutor(registry, sbox).
+		WithOutputPersister(tool.NewOutputPersister()).
+		WithLogger(log)
 
 	recorder := defaultHookRecorder()
 	hooks := newHookExecutor(opts, recorder, settings)
-	compactor := newCompactor(opts.ProjectRoot, opts.AutoCompact, opts.Model, opts.TokenLimit, hooks)
+	compactor := newCompactor(opts.ProjectRoot, opts.AutoCompact, opts.Model, opts.TokenLimit, hooks, log)
 
 	// Initialize tracer (noop without 'otel' build tag)
 	tracer, err := NewTracer(opts.OTEL)
@@ -169,10 +179,10 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.RulesEnabled == nil || (opts.RulesEnabled != nil && *opts.RulesEnabled) {
 		rulesLoader = config.NewRulesLoader(opts.ProjectRoot)
 		if _, err := rulesLoader.LoadRules(); err != nil {
-			log.Printf("rules loader warning: %v", err)
+			log.Warnf("rules loader warning: %v", err)
 		}
 		if err := rulesLoader.WatchChanges(nil); err != nil {
-			log.Printf("rules watcher warning: %v", err)
+			log.Warnf("rules watcher warning: %v", err)
 		}
 	}
 
@@ -187,7 +197,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		if historyPersister != nil {
 			histories.loader = historyPersister.Load
 			if err := historyPersister.Cleanup(retainDays); err != nil {
-				log.Printf("history cleanup warning: %v", err)
+				log.Warnf("history cleanup warning: %v", err)
 			}
 		}
 	}
@@ -213,6 +223,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		tokens:           newTokenTracker(opts.TokenTracking, opts.TokenCallback),
 		compactor:        compactor,
 		tracer:           tracer,
+		logger:           log,
 	}
 	rt.sessionGate = newSessionGate()
 
@@ -252,21 +263,42 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	req.SessionID = sessionID
 
+	rt.logger.Infof("[agentsdk] Run: session=%s, prompt=%s", sessionID, truncatePrompt(req.Prompt, 80))
+
 	if err := rt.sessionGate.Acquire(ctx, sessionID); err != nil {
+		rt.logger.Errorf("[agentsdk] Failed to acquire session gate: %v", err)
 		return nil, ErrConcurrentExecution
 	}
 	defer rt.sessionGate.Release(sessionID)
 
 	prep, err := rt.prepare(ctx, req)
 	if err != nil {
+		rt.logger.Errorf("[agentsdk] Failed to prepare: %v", err)
 		return nil, err
 	}
 	defer rt.persistHistory(prep.normalized.SessionID, prep.history)
+	
 	result, err := rt.runAgent(prep)
 	if err != nil {
+		rt.logger.Errorf("[agentsdk] Agent failed: %v", err)
 		return nil, err
 	}
+	
+	outputLen := 0
+	if result.output != nil && result.output.Content != "" {
+		outputLen = len(result.output.Content)
+	}
+	if outputLen > 0 {
+		rt.logger.Infof("[agentsdk] Completed: %d chars", outputLen)
+	}
 	return rt.buildResponse(prep, result), nil
+}
+
+func truncatePrompt(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 // RunStream executes the pipeline asynchronously and returns events over a channel.
@@ -383,10 +415,10 @@ func (rt *Runtime) Close() error {
 		if shutdownErr == nil && rt.histories != nil {
 			for _, sessionID := range rt.histories.SessionIDs() {
 				if cleanupErr := cleanupBashOutputSessionDir(sessionID); cleanupErr != nil {
-					log.Printf("api: session %q temp cleanup failed: %v", sessionID, cleanupErr)
+					rt.logger.Warnf("api: session %q temp cleanup failed: %v", sessionID, cleanupErr)
 				}
 				if cleanupErr := cleanupToolOutputSessionDir(sessionID); cleanupErr != nil {
-					log.Printf("api: session %q tool output cleanup failed: %v", sessionID, cleanupErr)
+					rt.logger.Warnf("api: session %q tool output cleanup failed: %v", sessionID, cleanupErr)
 				}
 			}
 		}
@@ -439,6 +471,44 @@ func (rt *Runtime) GetTotalStats() *SessionTokenStats {
 		return nil
 	}
 	return rt.tokens.GetTotalStats()
+}
+
+// ClearSession removes all conversation history for the given session.
+// This includes both in-memory history and persisted history on disk.
+// The session will start fresh on the next Run() call.
+func (rt *Runtime) ClearSession(sessionID string) error {
+	if rt == nil {
+		return fmt.Errorf("runtime is nil")
+	}
+	
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("session ID cannot be empty")
+	}
+	
+	// Clear in-memory history
+	if rt.histories != nil {
+		rt.histories.mu.Lock()
+		delete(rt.histories.data, sessionID)
+		delete(rt.histories.lastUsed, sessionID)
+		rt.histories.mu.Unlock()
+	}
+	
+	// Clear persisted history file
+	if rt.historyPersister != nil {
+		path := rt.historyPersister.filePath(sessionID)
+		if path != "" {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("failed to remove history file: %w", err)
+			}
+		}
+	}
+	
+	// Clean up tool output directories
+	_ = cleanupToolOutputSessionDir(sessionID)
+	_ = cleanupBashOutputSessionDir(sessionID)
+	
+	return nil
 }
 
 // ----------------- internal helpers -----------------
@@ -544,7 +614,7 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 			ModelTier: string(selectedTier),
 			Reason:    "subagent model mapping",
 		}); err != nil {
-			log.Printf("api: failed to emit ModelSelected event: %v", err)
+			rt.logger.Warnf("api: failed to emit ModelSelected event: %v", err)
 		}
 	}
 
@@ -568,6 +638,7 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		recorder:     prep.recorder,
 		compactor:    rt.compactor,
 		sessionID:    prep.normalized.SessionID,
+		logger:       rt.logger,
 	}
 
 	toolExec := &runtimeToolExecutor{
@@ -578,10 +649,25 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		root:               rt.sbRoot,
 		host:               "localhost",
 		sessionID:          prep.normalized.SessionID,
+		logger:             rt.logger,
 		permissionResolver: buildPermissionResolver(hookAdapter, rt.opts.PermissionRequestHandler, rt.opts.ApprovalQueue, rt.opts.ApprovalApprover, rt.opts.ApprovalWhitelistTTL, rt.opts.ApprovalWait),
 	}
 
-	chainItems := make([]middleware.Middleware, 0, len(rt.opts.Middleware)+len(extras))
+	// Build middleware chain with automatic error guard (unless explicitly disabled)
+	chainItems := make([]middleware.Middleware, 0, len(rt.opts.Middleware)+len(extras)+1)
+	
+	// Add error guard middleware first (default: enabled)
+	if rt.opts.ErrorGuardEnabled == nil || *rt.opts.ErrorGuardEnabled {
+		var egOpts []middleware.ErrorGuardOption
+		if rt.opts.ErrorGuardThreshold > 0 {
+			egOpts = append(egOpts, middleware.WithErrorThreshold(rt.opts.ErrorGuardThreshold))
+		}
+		if len(rt.opts.ErrorGuardMarkers) > 0 {
+			egOpts = append(egOpts, middleware.WithErrorMarkers(rt.opts.ErrorGuardMarkers))
+		}
+		chainItems = append(chainItems, middleware.NewErrorGuardMiddleware(egOpts...))
+	}
+	
 	if len(rt.opts.Middleware) > 0 {
 		chainItems = append(chainItems, rt.opts.Middleware...)
 	}
@@ -589,12 +675,14 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		chainItems = append(chainItems, extras...)
 	}
 	chain := middleware.NewChain(chainItems, middleware.WithTimeout(rt.opts.MiddlewareTimeout))
+	
 	ag, err := agent.New(modelAdapter, toolExec, agent.Options{
 		MaxIterations: rt.opts.MaxIterations,
 		Timeout:       rt.opts.Timeout,
 		Middleware:    chain,
 	})
 	if err != nil {
+		rt.logger.Errorf("[agentsdk] Failed to create agent: %v", err)
 		return runResult{}, err
 	}
 
@@ -612,10 +700,13 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 	if rt.skReg != nil {
 		agentCtx.Values["skills.registry"] = rt.skReg
 	}
+	
 	out, err := ag.Run(prep.ctx, agentCtx)
 	if err != nil {
+		rt.logger.Errorf("[agentsdk] agent.Run failed: %v", err)
 		return runResult{}, err
 	}
+	
 	if rt.tokens != nil && rt.tokens.IsEnabled() {
 		stats := tokenStatsFromUsage(modelAdapter.usage, "", prep.normalized.SessionID, prep.normalized.RequestID)
 		rt.tokens.Record(stats)
@@ -975,6 +1066,7 @@ type conversationModel struct {
 	recorder     *hookRecorder
 	compactor    *compactor
 	sessionID    string
+	logger       logger.Logger
 }
 
 func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*agent.ModelOutput, error) {
@@ -1000,6 +1092,20 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 	if m.trimmer != nil {
 		snapshot = m.trimmer.Trim(snapshot)
 	}
+	
+	// Check if error guard middleware requires intervention
+	st, ok := ctx.Value(model.MiddlewareStateKey).(*middleware.State)
+	if ok && st != nil && st.Values != nil {
+		shouldIntervene, _ := st.Values["error_guard.should_intervene"].(bool)
+		msg, _ := st.Values["error_guard.intervention_message"].(string)
+		if shouldIntervene && msg != "" {
+			snapshot = append(snapshot, message.Message{
+				Role:    "system",
+				Content: msg,
+			})
+		}
+	}
+	
 	systemPrompt := m.systemPrompt
 	if m.rulesLoader != nil {
 		if rules := m.rulesLoader.GetContent(); rules != "" {
@@ -1071,7 +1177,7 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 		}
 		for _, tc := range out.ToolCalls {
 			if len(tc.Input) == 0 {
-				log.Printf("WARNING: tool call %q (id=%s) has empty arguments — "+
+				m.logger.Warnf("WARNING: tool call %q (id=%s) has empty arguments — "+
 					"this usually means the API proxy stripped tool_use.input", tc.Name, tc.ID)
 			}
 		}
@@ -1087,6 +1193,7 @@ type runtimeToolExecutor struct {
 	root      string
 	host      string
 	sessionID string
+	logger    logger.Logger
 
 	permissionResolver tool.PermissionResolver
 }
@@ -1140,7 +1247,7 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 						"tool %q called with empty arguments but requires %v; "+
 							"the API proxy likely stripped tool_use.input — check proxy configuration",
 						call.Name, schema.Required)
-					log.Printf("WARNING: %s (id=%s)", errMsg, call.ID)
+					t.logger.Warnf("WARNING: %s (id=%s)", errMsg, call.ID)
 					if t.history != nil {
 						t.history.Append(message.Message{
 							Role: "tool",
@@ -1426,7 +1533,7 @@ func approvalActor(approver string) string {
 
 // ----------------- config + registries -----------------
 
-func registerTools(registry *tool.Registry, opts Options, settings *config.Settings, skReg *skills.Registry, cmdExec *commands.Executor) (*toolbuiltin.TaskTool, error) {
+func registerTools(registry *tool.Registry, opts Options, settings *config.Settings, skReg *skills.Registry, cmdExec *commands.Executor, log logger.Logger) (*toolbuiltin.TaskTool, error) {
 	entry := effectiveEntryPoint(opts)
 	tools := opts.Tools
 	var taskTool *toolbuiltin.TaskTool
@@ -1492,12 +1599,12 @@ func registerTools(registry *tool.Registry, opts Options, settings *config.Setti
 		canon := canonicalToolName(name)
 		if disallowed != nil {
 			if _, blocked := disallowed[canon]; blocked {
-				log.Printf("tool %s skipped: disallowed", name)
+				log.Infof("tool %s skipped: disallowed", name)
 				continue
 			}
 		}
 		if _, ok := seen[canon]; ok {
-			log.Printf("tool %s skipped: duplicate name", name)
+			log.Infof("tool %s skipped: duplicate name", name)
 			continue
 		}
 		seen[canon] = struct{}{}
