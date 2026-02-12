@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -34,6 +35,49 @@ var (
 	ErrToolUseDenied           = errors.New("api: tool use denied by hook")
 	ErrToolUseRequiresApproval = errors.New("api: tool use requires approval")
 )
+
+// RealtimeEventType defines the type of real-time event during agent execution
+type RealtimeEventType string
+
+const (
+	RealtimeEventProgressUpdate RealtimeEventType = "progress_update" // Progress report during execution
+	RealtimeEventErrorGuard     RealtimeEventType = "error_guard"     // Error threshold reached
+)
+
+// Real-time event configuration (hardcoded defaults)
+const (
+	defaultProgressInterval = 3  // Send progress update every 3 tool calls
+	defaultErrorThreshold   = 2  // Warn after 2 consecutive errors
+)
+
+// Default error markers for error detection
+var defaultErrorMarkers = []string{
+	"ERROR:",
+	"Error:",
+	"error:",
+	"failed:",
+	"Exit code",
+	"command failed:",
+}
+
+// RealtimeEvent represents a real-time event during agent execution
+type RealtimeEvent struct {
+	Type      RealtimeEventType // Event type
+	Message   string            // Human-readable message
+	Count     int               // Tool count (for progress) or error count (for error guard)
+	LastTool  string            // Name of the most recent tool
+	Timestamp time.Time         // When the event occurred
+	
+	// Recent tool calls with details (for progress updates)
+	RecentCalls []ToolCallSummary
+}
+
+// ToolCallSummary contains summarized info about a tool call
+type ToolCallSummary struct {
+	Name   string // Tool name
+	Params string // Summarized params (truncated to 100 chars)
+	Output string // Summarized output (truncated to 200 chars)
+}
 
 type EntryPoint string
 
@@ -186,10 +230,10 @@ type Options struct {
 	TokenLimit        int
 	MaxSessions       int
 
-	// ErrorGuard configuration for automatic error detection and intervention
-	ErrorGuardEnabled   *bool    // nil = enabled (default), false = disabled
-	ErrorGuardThreshold int      // Consecutive errors before intervention (default: 2)
-	ErrorGuardMarkers   []string // Custom error detection patterns
+	// Real-time event callback for progress updates and error warnings during execution
+	// Triggered synchronously when events occur (e.g., every N tool calls, or on error threshold)
+	// Default behavior (if nil): no real-time events, only post-execution events in Response.HookEvents
+	RealtimeEventCallback func(event RealtimeEvent)
 
 	Tools []tool.Tool
 
@@ -299,10 +343,8 @@ type Response struct {
 	CommandResults []CommandExecution
 	Subagent       *subagents.Result
 	HookEvents     []coreevents.Event
-	Attachments    []ResponseAttachment // Files to send to user (images, documents, etc.)
-	// Deprecated: Use Settings instead. Kept for backward compatibility.
-	ProjectConfig   *config.Settings
-	Settings        *config.Settings
+	ProjectConfig  *config.Settings
+	Settings       *config.Settings
 	SandboxSnapshot SandboxReport
 	Tags            map[string]string
 }
@@ -422,6 +464,7 @@ func (o Options) withDefaults() Options {
 	if o.MaxSessions <= 0 {
 		o.MaxSessions = defaultMaxSessions
 	}
+	
 	return o
 }
 
@@ -500,10 +543,6 @@ func (o Options) frozen() Options {
 	}
 	if len(o.SubagentModelMapping) > 0 {
 		o.SubagentModelMapping = maps.Clone(o.SubagentModelMapping)
-	}
-
-	if len(o.ErrorGuardMarkers) > 0 {
-		o.ErrorGuardMarkers = append([]string(nil), o.ErrorGuardMarkers...)
 	}
 
 	return o
@@ -686,6 +725,22 @@ func defaultHookRecorder() *hookRecorder {
 type runtimeHookAdapter struct {
 	executor *corehooks.Executor
 	recorder HookRecorder
+	
+	// Real-time event tracking (if callback is set)
+	realtimeCallback  func(RealtimeEvent)
+	toolCallCount     int
+	consecutiveErrors int
+	lastErrorTool     string
+	
+	// Recent tool calls for progress updates (keep last 5)
+	recentCalls []toolCallRecord
+}
+
+// toolCallRecord stores a single tool call for progress reporting
+type toolCallRecord struct {
+	name   string
+	params string // JSON string of params
+	result string
 }
 
 func (h *runtimeHookAdapter) PreToolUse(ctx context.Context, evt coreevents.ToolUsePayload) (map[string]any, error) {
@@ -757,6 +812,96 @@ func (h *runtimeHookAdapter) PostToolUse(ctx context.Context, evt coreevents.Too
 			return fmt.Errorf("hooks: PostToolUse hook requested stop: %s", res.Output.StopReason)
 		}
 	}
+	
+	// Real-time event tracking (only if callback is set)
+	if h.realtimeCallback != nil {
+		h.toolCallCount++
+		
+		// Record this tool call
+		paramsJSON, _ := json.Marshal(evt.Params)
+		resultStr := ""
+		if evt.Result != nil {
+			if s, ok := evt.Result.(string); ok {
+				resultStr = s
+			}
+		}
+		
+		record := toolCallRecord{
+			name:   evt.Name,
+			params: string(paramsJSON),
+			result: resultStr,
+		}
+		
+		// Keep only last 5 calls
+		h.recentCalls = append(h.recentCalls, record)
+		if len(h.recentCalls) > 5 {
+			h.recentCalls = h.recentCalls[len(h.recentCalls)-5:]
+		}
+		
+		// Progress update every N tool calls
+		if h.toolCallCount%defaultProgressInterval == 0 {
+			// Build recent call summaries
+			var summaries []ToolCallSummary
+			for _, rec := range h.recentCalls {
+				// Truncate params and output
+				params := rec.params
+				if len(params) > 100 {
+					params = params[:100] + "..."
+				}
+				output := rec.result
+				if len(output) > 200 {
+					output = output[:200] + "..."
+				}
+				
+				summaries = append(summaries, ToolCallSummary{
+					Name:   rec.name,
+					Params: params,
+					Output: output,
+				})
+			}
+			
+			h.realtimeCallback(RealtimeEvent{
+				Type:        RealtimeEventProgressUpdate,
+				Message:     fmt.Sprintf("⏳ 进行中... 已执行 %d 个操作（最近: %s）", h.toolCallCount, evt.Name),
+				Count:       h.toolCallCount,
+				LastTool:    evt.Name,
+				Timestamp:   time.Now(),
+				RecentCalls: summaries,
+			})
+		}
+		
+		// Error guard - detect consecutive errors
+		isError := evt.Err != nil
+		if !isError {
+			// Check output for error markers
+			if output, ok := evt.Result.(string); ok {
+				for _, marker := range defaultErrorMarkers {
+					if strings.Contains(output, marker) {
+						isError = true
+						break
+					}
+				}
+			}
+		}
+		
+		if isError {
+			h.consecutiveErrors++
+			h.lastErrorTool = evt.Name
+			if h.consecutiveErrors >= defaultErrorThreshold {
+				h.realtimeCallback(RealtimeEvent{
+					Type:      RealtimeEventErrorGuard,
+					Message:   fmt.Sprintf("⚠️ 检测到连续 %d 次工具执行失败（最近: %s）。请检查错误信息并调整策略。", h.consecutiveErrors, h.lastErrorTool),
+					Count:     h.consecutiveErrors,
+					LastTool:  h.lastErrorTool,
+					Timestamp: time.Now(),
+				})
+				h.consecutiveErrors = 0 // Reset after warning
+			}
+		} else {
+			h.consecutiveErrors = 0 // Reset on success
+		}
+	}
+	
 	return nil
 }
 

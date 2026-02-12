@@ -634,7 +634,11 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 
 	// Emit ModelSelected event if a non-default model was selected
 	if selectedTier != "" {
-		hookAdapter := &runtimeHookAdapter{executor: rt.hooks, recorder: prep.recorder}
+		hookAdapter := &runtimeHookAdapter{
+		executor:         rt.hooks,
+		recorder:         prep.recorder,
+		realtimeCallback: rt.opts.RealtimeEventCallback,
+	}
 		// Best-effort event emission; errors are logged but don't block execution
 		if err := hookAdapter.ModelSelected(prep.ctx, coreevents.ModelSelectedPayload{
 			ToolName:  prep.normalized.TargetSubagent,
@@ -651,7 +655,11 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		enableCache = *prep.normalized.EnablePromptCache
 	}
 
-	hookAdapter := &runtimeHookAdapter{executor: rt.hooks, recorder: prep.recorder}
+	hookAdapter := &runtimeHookAdapter{
+		executor:         rt.hooks,
+		recorder:         prep.recorder,
+		realtimeCallback: rt.opts.RealtimeEventCallback,
+	}
 	modelAdapter := &conversationModel{
 		base:         selectedModel,
 		history:      prep.history,
@@ -681,20 +689,8 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		permissionResolver: buildPermissionResolver(hookAdapter, rt.opts.PermissionRequestHandler, rt.opts.ApprovalQueue, rt.opts.ApprovalApprover, rt.opts.ApprovalWhitelistTTL, rt.opts.ApprovalWait),
 	}
 
-	// Build middleware chain with automatic error guard (unless explicitly disabled)
-	chainItems := make([]middleware.Middleware, 0, len(rt.opts.Middleware)+len(extras)+1)
-	
-	// Add error guard middleware first (default: enabled)
-	if rt.opts.ErrorGuardEnabled == nil || *rt.opts.ErrorGuardEnabled {
-		var egOpts []middleware.ErrorGuardOption
-		if rt.opts.ErrorGuardThreshold > 0 {
-			egOpts = append(egOpts, middleware.WithErrorThreshold(rt.opts.ErrorGuardThreshold))
-		}
-		if len(rt.opts.ErrorGuardMarkers) > 0 {
-			egOpts = append(egOpts, middleware.WithErrorMarkers(rt.opts.ErrorGuardMarkers))
-		}
-		chainItems = append(chainItems, middleware.NewErrorGuardMiddleware(egOpts...))
-	}
+	// Build middleware chain
+	chainItems := make([]middleware.Middleware, 0, len(rt.opts.Middleware)+len(extras))
 	
 	if len(rt.opts.Middleware) > 0 {
 		chainItems = append(chainItems, rt.opts.Middleware...)
@@ -775,8 +771,9 @@ func (rt *Runtime) buildResponse(prep preparedRun, result runResult) *Response {
 		events = prep.recorder.Drain()
 	}
 	
-	// Extract attachments from tool results
-	attachments := rt.extractAttachments(events)
+	// Scan events and emit FileAttachment events
+	newEvents := rt.extractSpecialEvents(events)
+	events = append(events, newEvents...)
 	
 	resp := &Response{
 		Mode:            prep.mode,
@@ -786,7 +783,6 @@ func (rt *Runtime) buildResponse(prep preparedRun, result runResult) *Response {
 		SkillResults:    prep.skillResults,
 		Subagent:        prep.subagentResult,
 		HookEvents:      events,
-		Attachments:     attachments,
 		ProjectConfig:   rt.Settings(),
 		Settings:        rt.Settings(),
 		SandboxSnapshot: rt.sandboxReport(),
@@ -794,6 +790,7 @@ func (rt *Runtime) buildResponse(prep preparedRun, result runResult) *Response {
 	}
 	return resp
 }
+
 
 func (rt *Runtime) sandboxReport() SandboxReport {
 	report := snapshotSandbox(rt.sandbox)
@@ -1133,19 +1130,6 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 		snapshot = m.trimmer.Trim(snapshot)
 	}
 	
-	// Check if error guard middleware requires intervention
-	st, ok := ctx.Value(model.MiddlewareStateKey).(*middleware.State)
-	if ok && st != nil && st.Values != nil {
-		shouldIntervene, _ := st.Values["error_guard.should_intervene"].(bool)
-		msg, _ := st.Values["error_guard.intervention_message"].(string)
-		if shouldIntervene && msg != "" {
-			snapshot = append(snapshot, message.Message{
-				Role:    "system",
-				Content: msg,
-			})
-		}
-	}
-	
 	systemPrompt := m.systemPrompt
 	if m.rulesLoader != nil {
 		if rules := m.rulesLoader.GetContent(); rules != "" {
@@ -1424,7 +1408,10 @@ func coreToolUsePayload(call agent.ToolCall) coreevents.ToolUsePayload {
 }
 
 func coreToolResultPayload(call agent.ToolCall, res *tool.CallResult, err error) coreevents.ToolResultPayload {
-	payload := coreevents.ToolResultPayload{Name: call.Name}
+	payload := coreevents.ToolResultPayload{
+		Name:   call.Name,
+		Params: call.Input, // Include original params
+	}
 	if res != nil && res.Result != nil {
 		payload.Result = res.Result.Output
 		payload.Duration = res.Duration()
@@ -1755,6 +1742,7 @@ func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, s
 	factories["task_get"] = func() tool.Tool { return toolbuiltin.NewTaskGetTool(taskStore) }
 	factories["task_update"] = func() tool.Tool { return toolbuiltin.NewTaskUpdateTool(taskStore) }
 	factories["ask_user_question"] = func() tool.Tool { return toolbuiltin.NewAskUserQuestionTool() }
+	factories["send_file"] = func() tool.Tool { return toolbuiltin.NewSendFileTool() }
 	factories["skill"] = func() tool.Tool { return toolbuiltin.NewSkillTool(skReg, nil) }
 	factories["slash_command"] = func() tool.Tool { return toolbuiltin.NewSlashCommandTool(cmdExec) }
 
@@ -1781,6 +1769,7 @@ func builtinOrder(entry EntryPoint) []string {
 		"task_get",
 		"task_update",
 		"ask_user_question",
+		"send_file",
 		"skill",
 		"slash_command",
 		"grep",
@@ -1942,75 +1931,3 @@ func loadImageAsBase64(filePath, mimeType string) (string, string, error) {
 	return encoded, mimeType, nil
 }
 
-// extractAttachments scans HookEvents for tool results containing file attachments
-// (e.g., screenshots) and converts them into ResponseAttachment objects.
-func (rt *Runtime) extractAttachments(events []coreevents.Event) []ResponseAttachment {
-	var attachments []ResponseAttachment
-	
-	for _, event := range events {
-		if event.Type != coreevents.PostToolUse {
-			continue
-		}
-		
-		payload, ok := event.Payload.(coreevents.ToolResultPayload)
-		if !ok {
-			continue
-		}
-		
-		// Check if Result is a map containing structured data
-		resultMap, ok := payload.Result.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		
-		// Look for "path" field indicating a file attachment
-		pathStr, hasPath := resultMap["path"].(string)
-		if !hasPath || pathStr == "" {
-			continue
-		}
-		
-		// Determine attachment type from path or metadata
-		attType := AttachmentTypeFile
-		if strings.Contains(pathStr, "screenshot") || strings.HasSuffix(pathStr, ".png") || 
-		   strings.HasSuffix(pathStr, ".jpg") || strings.HasSuffix(pathStr, ".jpeg") {
-			attType = AttachmentTypeImage
-		}
-		
-		// Auto-detect MIME type
-		mimeType := ""
-		ext := strings.ToLower(filepath.Ext(pathStr))
-		switch ext {
-		case ".png":
-			mimeType = "image/png"
-		case ".jpg", ".jpeg":
-			mimeType = "image/jpeg"
-		case ".gif":
-			mimeType = "image/gif"
-		case ".webp":
-			mimeType = "image/webp"
-		case ".pdf":
-			mimeType = "application/pdf"
-		}
-		
-		// Extract metadata
-		metadata := make(map[string]interface{})
-		for k, v := range resultMap {
-			if k != "path" && k != "filename" {
-				metadata[k] = v
-			}
-		}
-		
-		attachment := ResponseAttachment{
-			Type:     attType,
-			Path:     pathStr,
-			MimeType: mimeType,
-			Source:   payload.Name, // Tool name (e.g., "Bash", "Skill")
-			Metadata: metadata,
-		}
-		
-		attachments = append(attachments, attachment)
-		rt.logger.Debugf("[api] Extracted attachment: %s (type=%s, source=%s)", pathStr, attType, payload.Name)
-	}
-	
-	return attachments
-}

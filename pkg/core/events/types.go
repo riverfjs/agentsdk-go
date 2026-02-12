@@ -27,6 +27,9 @@ const (
 	PermissionRequest  EventType = "PermissionRequest"
 	ModelSelected      EventType = "ModelSelected"
 	MCPToolsChanged    EventType = "MCPToolsChanged"
+	FileAttachment     EventType = "FileAttachment"     // Emitted when tool produces file attachments (screenshots, etc.)
+	ProgressUpdate     EventType = "ProgressUpdate"     // Emitted for progress updates during long-running tasks
+	ErrorGuardWarning  EventType = "ErrorGuardWarning"  // Emitted when consecutive tool errors are detected
 )
 
 // Event represents a single occurrence in the system. It is intentionally
@@ -202,4 +205,33 @@ type MCPToolDescriptor struct {
 	InputSchema  any
 	OutputSchema any
 	Title        string
+}
+
+// FileAttachmentPayload is emitted when a tool execution produces file attachments
+// (e.g., screenshots, generated documents). This allows the gateway to handle
+// file attachments separately from text output.
+type FileAttachmentPayload struct {
+	ToolName    string         // Name of the tool that produced the attachment
+	FilePath    string         // Full path to the file
+	FileName    string         // Base name of the file
+	MimeType    string         // MIME type (e.g., "image/png", "application/pdf")
+	Type        string         // Attachment type: "image", "file", "video", etc.
+	Metadata    map[string]any // Optional metadata (e.g., fullPage, selector for screenshots)
+	ToolUseID   string         // Links to the ToolResultPayload.ToolUseID
+	Description string         // Optional user-friendly description
+}
+
+// ProgressUpdatePayload is emitted to send progress updates during long-running tasks.
+type ProgressUpdatePayload struct {
+	Message   string // Progress message (e.g., "⏳ 进行中... 已执行 3 个操作")
+	ToolCount int    // Number of tools executed so far
+	LastTool  string // Name of the most recent tool executed
+}
+
+// ErrorGuardWarningPayload is emitted when consecutive tool errors are detected.
+type ErrorGuardWarningPayload struct {
+	Message       string   // Warning message to display to user
+	ErrorCount    int      // Number of consecutive errors detected
+	FailedTools   []string // Names of tools that failed
+	LastError     string   // The most recent error message
 }
