@@ -4,6 +4,8 @@
 
 An Agent SDK implemented in Go that implements core Claude Code-style runtime capabilities, plus an optional middleware interception layer.
 
+> **Fork of [cexll/agentsdk-go](https://github.com/cexll/agentsdk-go)** — extended with realtime progress events, per-call tool logging, and additional builtin tools (memory, skill listing).
+
 ## Overview
 
 agentsdk-go is a modular agent development framework that implements core Claude Code-style runtime capabilities (Hooks, MCP, Sandbox, Skills, Subagents, Commands, Tasks) and optionally exposes a six-point middleware interception mechanism. The SDK supports deployment scenarios across CLI, CI/CD, and enterprise platforms.
