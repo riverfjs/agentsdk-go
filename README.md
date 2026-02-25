@@ -4,7 +4,7 @@
 
 An Agent SDK implemented in Go that implements core Claude Code-style runtime capabilities, plus an optional middleware interception layer.
 
-> **Fork of [cexll/agentsdk-go](https://github.com/cexll/agentsdk-go)** — extended with realtime progress events, per-call tool logging, and additional builtin tools (memory, skill listing).
+> **Fork of [cexll/agentsdk-go](https://github.com/cexll/agentsdk-go)** — extended with realtime progress events, per-call tool logging, and additional builtin tools (memory read/write/search, skill listing).
 
 ## Overview
 
@@ -24,6 +24,13 @@ agentsdk-go is a modular agent development framework that implements core Claude
 - **Rules Configuration**: `.claude/rules/` directory support with hot-reload
 - **OpenTelemetry**: Distributed tracing with span propagation
 - **UUID Tracking**: Request-level UUID for observability
+
+### Extended Builtin Tools
+- **`memory_write`**: Write or append to `MEMORY.md` (long-term facts) or `memory/YYYY-MM-DD.md` (daily journal). Paths outside these are rejected.
+- **`memory_get`**: Read specific line ranges from a memory file — use after `memory_search` to pull only needed lines.
+- **`memory_search`**: Semantic keyword search across `MEMORY.md` + all `memory/*.md` files. Returns ranked snippets with file path and line range. Agent is instructed to call this before answering questions about past events, decisions, or preferences.
+- **`list_skills`**: List available skills in the workspace `.claude/skills/` directory.
+- **Realtime Progress Events**: Each tool call emits a progress event with the current tool name and parameters (not cumulative).
 
 ### Concurrency Model
 - **Thread-Safe Runtime**: Runtime guards mutable state with internal locks.
