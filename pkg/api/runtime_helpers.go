@@ -332,12 +332,13 @@ func mergeSubagentRegistrations(manual []SubagentRegistration, project []subagen
 }
 
 type historyStore struct {
-	mu       sync.Mutex
-	data     map[string]*message.History
-	lastUsed map[string]time.Time
-	maxSize  int
-	onEvict  func(string)
-	loader   func(string) ([]message.Message, error)
+	mu           sync.Mutex
+	data         map[string]*message.History
+	lastUsed     map[string]time.Time
+	maxSize      int
+	historyLimit int // max user turns to load; 0 = unlimited
+	onEvict      func(string)
+	loader       func(string) ([]message.Message, error)
 }
 
 func newHistoryStore(maxSize int) *historyStore {
@@ -349,6 +350,27 @@ func newHistoryStore(maxSize int) *historyStore {
 		lastUsed: map[string]time.Time{},
 		maxSize:  maxSize,
 	}
+}
+
+// limitHistoryTurns keeps only the last `limit` user turns (and their
+// associated responses) from msgs. If limit <= 0 the full slice is returned.
+// Matches openclaw's limitHistoryTurns logic.
+func limitHistoryTurns(msgs []message.Message, limit int) []message.Message {
+	if limit <= 0 || len(msgs) == 0 {
+		return msgs
+	}
+	userCount := 0
+	lastUserIndex := len(msgs)
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			userCount++
+			if userCount > limit {
+				return msgs[lastUserIndex:]
+			}
+			lastUserIndex = i
+		}
+	}
+	return msgs
 }
 
 func (s *historyStore) Get(id string) *message.History {
@@ -374,6 +396,7 @@ func (s *historyStore) Get(id string) *message.History {
 	s.mu.Unlock()
 	if loader != nil {
 		if loaded, err := loader(id); err == nil && len(loaded) > 0 {
+			loaded = limitHistoryTurns(loaded, s.historyLimit)
 			hist.Replace(loaded)
 		}
 	}

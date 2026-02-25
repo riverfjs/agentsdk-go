@@ -85,6 +85,10 @@ type Runtime struct {
 	tracer    Tracer
 	logger    logger.Logger
 
+	// per-session token tracking for memory flush
+	sessionLastInputTokens sync.Map // sessionID → int64
+	sessionMemoryFlushed   sync.Map // sessionID → bool
+
 	mu sync.RWMutex
 
 	runMu     sync.Mutex
@@ -189,6 +193,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 
 	histories := newHistoryStore(opts.MaxSessions)
+	histories.historyLimit = opts.HistoryLimit
 	var historyPersister *diskHistoryPersister
 	retainDays := 0
 	if settings != nil && settings.CleanupPeriodDays != nil {
@@ -279,13 +284,23 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (*Response, error) {
 		return nil, err
 	}
 	defer rt.persistHistory(prep.normalized.SessionID, prep.history)
-	
+
+	// Run memory flush turn if approaching context window limit (uses previous turn's token count).
+	if rt.shouldMemoryFlush(prep.normalized.SessionID) {
+		rt.runMemoryFlushTurn(ctx, prep)
+	}
+
 	result, err := rt.runAgent(prep)
 	if err != nil {
 		rt.logger.Errorf("[agentsdk] Agent failed: %v", err)
 		return nil, err
 	}
-	
+
+	// Save real input token count for the next turn's memory flush check.
+	if result.usage.InputTokens > 0 {
+		rt.sessionLastInputTokens.Store(prep.normalized.SessionID, int64(result.usage.InputTokens))
+	}
+
 	outputLen := 0
 	if result.output != nil && result.output.Content != "" {
 		outputLen = len(result.output.Content)
@@ -509,8 +524,47 @@ func (rt *Runtime) ClearSession(sessionID string) error {
 	// Clean up tool output directories
 	_ = cleanupToolOutputSessionDir(sessionID)
 	_ = cleanupBashOutputSessionDir(sessionID)
-	
+
+	// Reset memory flush state so a new session cycle can trigger flush again.
+	rt.sessionLastInputTokens.Delete(sessionID)
+	rt.sessionMemoryFlushed.Delete(sessionID)
+
 	return nil
+}
+
+// GetHistory returns all stored messages for the given session.
+// It first checks the in-memory store, then falls back to persisted history.
+// Returns nil, nil if no history exists for the session.
+func (rt *Runtime) GetHistory(sessionID string) ([]message.Message, error) {
+	if rt == nil {
+		return nil, fmt.Errorf("runtime is nil")
+	}
+
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, fmt.Errorf("session ID cannot be empty")
+	}
+
+	// Check in-memory store first (no loader, just peek)
+	if rt.histories != nil {
+		rt.histories.mu.Lock()
+		hist, ok := rt.histories.data[sessionID]
+		rt.histories.mu.Unlock()
+		if ok && hist != nil {
+			return hist.All(), nil
+		}
+	}
+
+	// Fall back to persisted history on disk
+	if rt.historyPersister != nil {
+		msgs, err := rt.historyPersister.Load(sessionID)
+		if err != nil {
+			return nil, fmt.Errorf("load history: %w", err)
+		}
+		return msgs, nil
+	}
+
+	return nil, nil
 }
 
 // ----------------- internal helpers -----------------
@@ -554,7 +608,11 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 	if normalized.RequestID == "" {
 		normalized.RequestID = uuid.New().String()
 	}
-	
+
+	// Always prepend the real current date/time so the model uses the actual clock
+	// rather than its training-data cutoff when answering time-sensitive questions.
+	prompt = "[Current time: " + time.Now().Format("2006-01-02 15:04 MST") + "]\n" + prompt
+
 	// Process attachments (convert to base64)
 	var msgAttachments []model.MessageAttachment
 	for _, att := range normalized.Attachments {
@@ -587,6 +645,46 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 		}
 	}
 
+	// Context Window Guard: estimate token usage from history and warn/reject
+	// if approaching the configured limit. Runs after compaction so the estimate
+	// reflects the (possibly-compacted) state of the conversation.
+	if rt.opts.ContextWindowTokens > 0 {
+		estimated := estimateHistoryTokens(history)
+		warnRatio := rt.opts.ContextWindowWarnRatio
+		if warnRatio <= 0 {
+			warnRatio = 0.8
+		}
+		hardMin := rt.opts.ContextWindowHardMinTokens
+		if hardMin <= 0 {
+			hardMin = 2000
+		}
+		remaining := rt.opts.ContextWindowTokens - estimated
+		usageRatio := float64(estimated) / float64(rt.opts.ContextWindowTokens)
+
+		if remaining < hardMin {
+			return preparedRun{}, fmt.Errorf(
+				"⚠️ 上下文窗口已满（估算已用约 %d tokens，仅剩 %d tokens，上限 %d tokens）。\n"+
+					"请使用 /reset 开始新会话。在重置前，可用 memory_write 工具将重要内容写入 MEMORY.md。",
+				estimated, remaining, rt.opts.ContextWindowTokens,
+			)
+		}
+		if usageRatio >= warnRatio {
+			warnMsg := fmt.Sprintf(
+				"⚠️ 上下文窗口已使用约 %.0f%%（%d / %d tokens），建议整理重要内容到 MEMORY.md，或使用 /reset 重置会话。",
+				usageRatio*100, estimated, rt.opts.ContextWindowTokens,
+			)
+			rt.logger.Warnf("[agentsdk] context window: estimated %d / %d tokens used (%.0f%%)",
+				estimated, rt.opts.ContextWindowTokens, usageRatio*100)
+			if rt.opts.RealtimeEventCallback != nil {
+				rt.opts.RealtimeEventCallback(RealtimeEvent{
+					Type:      RealtimeEventContextWindowWarn,
+					Message:   warnMsg,
+					Timestamp: time.Now(),
+				})
+			}
+		}
+	}
+
 	activation := normalized.activationContext(prompt)
 
 	cmdRes, cleanPrompt, err := rt.executeCommands(ctx, prompt, &normalized)
@@ -608,6 +706,31 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 	}
 	prompt = promptAfterSubagent
 	activation.Prompt = prompt
+
+	// Auto-recall: search MEMORY.md before the agent turn and prepend relevant
+	// memories to the prompt. This mirrors openclaw's before_agent_start hook
+	// and ensures the agent doesn't need to decide to call memory_search itself.
+	if rt.opts.AutoRecall && strings.TrimSpace(rt.opts.ProjectRoot) != "" {
+		maxR := rt.opts.AutoRecallMaxResults
+		if maxR <= 0 {
+			maxR = 3
+		}
+		if results, _ := toolbuiltin.SearchMemory(rt.opts.ProjectRoot, prompt, maxR); len(results) > 0 {
+			var sb strings.Builder
+			sb.WriteString("<relevant-memories>\n")
+			sb.WriteString("The following memories may be relevant to this conversation:\n")
+			for _, r := range results {
+				sb.WriteString("- ")
+				sb.WriteString(r.Snippet)
+				sb.WriteByte('\n')
+			}
+			sb.WriteString("</relevant-memories>\n\n")
+			sb.WriteString(prompt)
+			prompt = sb.String()
+			rt.logger.Debugf("[agentsdk] auto-recall: injected %d memory snippet(s) into prompt", len(results))
+		}
+	}
+
 	whitelist := combineToolWhitelists(normalized.ToolWhitelist, nil)
 	return preparedRun{
 		ctx:            ctx,
@@ -635,10 +758,11 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 	// Emit ModelSelected event if a non-default model was selected
 	if selectedTier != "" {
 		hookAdapter := &runtimeHookAdapter{
-		executor:         rt.hooks,
-		recorder:         prep.recorder,
-		realtimeCallback: rt.opts.RealtimeEventCallback,
-	}
+			executor:         rt.hooks,
+			recorder:         prep.recorder,
+			realtimeCallback: rt.opts.RealtimeEventCallback,
+			progressInterval: rt.opts.ProgressInterval,
+		}
 		// Best-effort event emission; errors are logged but don't block execution
 		if err := hookAdapter.ModelSelected(prep.ctx, coreevents.ModelSelectedPayload{
 			ToolName:  prep.normalized.TargetSubagent,
@@ -659,6 +783,7 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		executor:         rt.hooks,
 		recorder:         prep.recorder,
 		realtimeCallback: rt.opts.RealtimeEventCallback,
+		progressInterval: rt.opts.ProgressInterval,
 	}
 	modelAdapter := &conversationModel{
 		base:         selectedModel,
@@ -1079,6 +1204,88 @@ func (rt *Runtime) newTrimmer() *message.Trimmer {
 	return message.NewTrimmer(rt.opts.TokenLimit, nil)
 }
 
+// estimateHistoryTokens returns a rough token count for the conversation history
+// using the common approximation of 1 token ≈ 4 bytes of UTF-8 text.
+// Intended for lightweight Context Window Guard checks, not billing-accurate counting.
+func estimateHistoryTokens(history *message.History) int {
+	if history == nil {
+		return 0
+	}
+	total := 0
+	for _, msg := range history.All() {
+		total += len(msg.Content)
+		for _, tc := range msg.ToolCalls {
+			// name + result + small fixed overhead for ID and JSON structure
+			total += len(tc.Name) + len(tc.Result) + 20
+		}
+	}
+	return total / 4
+}
+
+// shouldMemoryFlush returns true if the previous turn's input tokens crossed the
+// memory-flush threshold and no flush has been performed yet this session cycle.
+func (rt *Runtime) shouldMemoryFlush(sessionID string) bool {
+	cfg := rt.opts.MemoryFlush
+	if !cfg.Enabled || rt.opts.ContextWindowTokens <= 0 {
+		return false
+	}
+	if v, ok := rt.sessionMemoryFlushed.Load(sessionID); ok && v.(bool) {
+		return false
+	}
+	v, ok := rt.sessionLastInputTokens.Load(sessionID)
+	if !ok {
+		return false
+	}
+	lastTokens := v.(int64)
+	if lastTokens <= 0 {
+		return false
+	}
+	soft := cfg.SoftThresholdTokens
+	if soft <= 0 {
+		soft = 4000
+	}
+	reserve := cfg.ReserveTokensFloor
+	if reserve <= 0 {
+		reserve = 20000
+	}
+	threshold := int64(rt.opts.ContextWindowTokens - reserve - soft)
+	if threshold <= 0 {
+		return false
+	}
+	return lastTokens >= threshold
+}
+
+// runMemoryFlushTurn runs a hidden agent turn that asks the agent to persist
+// important memories to disk. The turn's messages are NOT added to the real
+// session history; only tool side-effects (file writes) persist.
+func (rt *Runtime) runMemoryFlushTurn(ctx context.Context, prep preparedRun) {
+	cfg := rt.opts.MemoryFlush
+	prompt := strings.TrimSpace(cfg.Prompt)
+	if prompt == "" {
+		prompt = "Pre-compaction memory flush. Store durable memories now (use memory/YYYY-MM-DD.md; create memory/ if needed). If nothing important to store, just say so briefly."
+	}
+
+	// Clone the current history so the flush turn's messages don't pollute the real session.
+	flushHistory := message.NewHistory()
+	flushHistory.Replace(prep.history.All())
+
+	flushPrep := preparedRun{
+		ctx:       ctx,
+		history:   flushHistory,
+		prompt:    prompt,
+		normalized: prep.normalized,
+		recorder:  defaultHookRecorder(), // discard flush events from the response
+		mode:      prep.mode,
+		toolWhitelist: prep.toolWhitelist,
+	}
+
+	rt.logger.Infof("[agentsdk] Running memory flush for session %s (inputTokens near limit)", prep.normalized.SessionID)
+	if _, err := rt.runAgentWithMiddleware(flushPrep); err != nil {
+		rt.logger.Warnf("[agentsdk] Memory flush turn failed: %v", err)
+	}
+	rt.sessionMemoryFlushed.Store(prep.normalized.SessionID, true)
+}
+
 // ----------------- adapters -----------------
 
 type conversationModel struct {
@@ -1191,6 +1398,20 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 			assistant.ToolCalls[i] = message.ToolCall{ID: call.ID, Name: call.Name, Arguments: call.Arguments}
 		}
 	}
+	// Fix null/empty tool_use.input BEFORE appending to history.
+	// Some API proxies strip tool_use.input entirely (returning null), which causes
+	// 400 errors when the message is replayed in subsequent requests. Substitute {}
+	// so the stored history always contains a valid dictionary.
+	for i, call := range assistant.ToolCalls {
+		if len(call.Arguments) == 0 {
+			m.logger.Warnf("[agentsdk] tool call %q (id=%s) has no arguments — "+
+				"API proxy likely stripped tool_use.input; will use sentinel {\"_\":\"\"} on next request", call.Name, call.ID)
+			// Use a non-empty sentinel so API proxies don't strip tool_use.input.
+			// Tools that take no parameters safely ignore this key.
+			assistant.ToolCalls[i].Arguments = map[string]any{"_": ""}
+		}
+	}
+
 	m.history.Append(assistant)
 
 	out := &agent.ModelOutput{Content: assistant.Content, Done: len(assistant.ToolCalls) == 0}
@@ -1198,12 +1419,6 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 		out.ToolCalls = make([]agent.ToolCall, len(assistant.ToolCalls))
 		for i, call := range assistant.ToolCalls {
 			out.ToolCalls[i] = agent.ToolCall{ID: call.ID, Name: call.Name, Input: call.Arguments}
-		}
-		for _, tc := range out.ToolCalls {
-			if len(tc.Input) == 0 {
-				m.logger.Warnf("WARNING: tool call %q (id=%s) has empty arguments — "+
-					"this usually means the API proxy stripped tool_use.input", tc.Name, tc.ID)
-			}
 		}
 	}
 	return out, nil
@@ -1745,6 +1960,10 @@ func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, s
 	factories["send_file"] = func() tool.Tool { return toolbuiltin.NewSendFileTool() }
 	factories["skill"] = func() tool.Tool { return toolbuiltin.NewSkillTool(skReg, nil) }
 	factories["slash_command"] = func() tool.Tool { return toolbuiltin.NewSlashCommandTool(cmdExec) }
+	factories["memory_search"] = func() tool.Tool { return toolbuiltin.NewMemorySearchTool(root) }
+	factories["memory_get"] = func() tool.Tool { return toolbuiltin.NewMemoryGetTool(root) }
+	factories["memory_write"] = func() tool.Tool { return toolbuiltin.NewMemoryWriteTool(root) }
+	factories["list_skills"] = func() tool.Tool { return toolbuiltin.NewListSkillsTool(root) }
 
 	if shouldRegisterTaskTool(entry) {
 		factories["task"] = func() tool.Tool { return toolbuiltin.NewTaskTool() }
@@ -1774,6 +1993,10 @@ func builtinOrder(entry EntryPoint) []string {
 		"slash_command",
 		"grep",
 		"glob",
+		"memory_search",
+		"memory_get",
+		"memory_write",
+		"list_skills",
 	}
 	if shouldRegisterTaskTool(entry) {
 		order = append(order, "task")

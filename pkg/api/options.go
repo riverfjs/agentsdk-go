@@ -40,25 +40,15 @@ var (
 type RealtimeEventType string
 
 const (
-	RealtimeEventProgressUpdate RealtimeEventType = "progress_update" // Progress report during execution
-	RealtimeEventErrorGuard     RealtimeEventType = "error_guard"     // Error threshold reached
+	RealtimeEventProgressUpdate    RealtimeEventType = "progress_update"     // Progress report during execution
+	RealtimeEventErrorGuard        RealtimeEventType = "error_guard"         // Error threshold reached
+	RealtimeEventContextWindowWarn RealtimeEventType = "context_window_warn" // Context window approaching limit
 )
 
 // Real-time event configuration (hardcoded defaults)
 const (
-	defaultProgressInterval = 3  // Send progress update every 3 tool calls
-	defaultErrorThreshold   = 2  // Warn after 2 consecutive errors
+	defaultProgressInterval = 5 // Send progress update every 5 tool calls
 )
-
-// Default error markers for error detection
-var defaultErrorMarkers = []string{
-	"ERROR:",
-	"Error:",
-	"error:",
-	"failed:",
-	"Exit code",
-	"command failed:",
-}
 
 // RealtimeEvent represents a real-time event during agent execution
 type RealtimeEvent struct {
@@ -191,6 +181,27 @@ func (fn ModelFactoryFunc) Model(ctx context.Context) (model.Model, error) {
 	return fn(ctx)
 }
 
+// MemoryFlushConfig controls automatic memory flush before context window exhaustion.
+// Flush fires when inputTokens >= ContextWindowTokens - ReserveTokensFloor - SoftThresholdTokens.
+// With defaults and a 200k context window this triggers at ~176k tokens (88%), matching openclaw.
+type MemoryFlushConfig struct {
+	// Enabled turns memory flush on or off. Default false.
+	Enabled bool
+
+	// ReserveTokensFloor is the number of tokens reserved for model output during the flush turn.
+	// This is separate from ContextWindowHardMinTokens (which is the hard reject threshold).
+	// 0 defaults to 20000 (same as openclaw's DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR).
+	ReserveTokensFloor int
+
+	// SoftThresholdTokens is the additional early-trigger buffer before ReserveTokensFloor.
+	// 0 defaults to 4000 (same as openclaw).
+	SoftThresholdTokens int
+
+	// Prompt is the synthetic user message injected for the flush turn.
+	// Empty uses the default openclaw-style prompt.
+	Prompt string
+}
+
 // Options configures the unified SDK runtime.
 type Options struct {
 	EntryPoint  EntryPoint
@@ -229,11 +240,31 @@ type Options struct {
 	Timeout           time.Duration
 	TokenLimit        int
 	MaxSessions       int
+	// HistoryLimit caps the number of user turns loaded from persisted history
+	// into the active session context. 0 means no limit (all history loaded).
+	// Keeping this small reduces token usage and encourages use of memory tools.
+	HistoryLimit int
 
-	// Real-time event callback for progress updates and error warnings during execution
-	// Triggered synchronously when events occur (e.g., every N tool calls, or on error threshold)
-	// Default behavior (if nil): no real-time events, only post-execution events in Response.HookEvents
+
+	// Real-time event callback for progress updates during execution.
+	// Triggered synchronously every ProgressInterval tool calls.
+	// Default behavior (if nil): no real-time events, only post-execution events in Response.HookEvents.
 	RealtimeEventCallback func(event RealtimeEvent)
+
+	// ProgressInterval controls how often progress log messages are sent (every N tool calls).
+	// 0 means use the default (5). Only effective when RealtimeEventCallback is set.
+	ProgressInterval int
+
+	// AutoRecall enables automatic memory injection before each agent turn.
+	// When true, the runtime searches MEMORY.md + memory/*.md using the user's
+	// prompt and prepends the top results as <relevant-memories> context.
+	// This ensures the agent always has relevant past context without needing
+	// to decide whether to call memory_search itself.
+	AutoRecall bool
+
+	// AutoRecallMaxResults controls how many memory snippets are injected.
+	// 0 means use the default (3).
+	AutoRecallMaxResults int
 
 	Tools []tool.Tool
 
@@ -284,6 +315,29 @@ type Options struct {
 	ApprovalWhitelistTTL time.Duration
 	// ApprovalWait blocks tool execution until a pending approval is resolved.
 	ApprovalWait bool
+
+	// ContextWindowTokens is the total context window size in tokens for the configured model.
+	// When set to > 0, enables the Context Window Guard which warns when approaching the limit
+	// and rejects requests when estimated remaining tokens fall below ContextWindowHardMinTokens.
+	// Must be configured manually when using self-hosted proxies that don't advertise context size.
+	// Common values: 200000 (Claude 3.5/3.7 Sonnet), 128000 (GPT-4o), 32000 (smaller models).
+	ContextWindowTokens int
+
+	// ContextWindowWarnRatio is the fraction of ContextWindowTokens at which a warning is emitted.
+	// 0 or unset defaults to 0.8 (warn when more than 80% of context window is estimated used).
+	ContextWindowWarnRatio float64
+
+	// ContextWindowHardMinTokens is the minimum estimated remaining tokens below which the agent
+	// rejects the request with a user-facing message advising /reset.
+	// 0 or unset defaults to 2000.
+	ContextWindowHardMinTokens int
+
+	// MemoryFlush controls automatic memory flush before context window exhaustion.
+	// When enabled, the runtime runs a hidden agent turn to persist important memories
+	// to disk (memory/YYYY-MM-DD.md) when input tokens approach the configured limit.
+	// This mirrors openclaw's pre-compaction memory flush behaviour.
+	// Requires ContextWindowTokens to be set.
+	MemoryFlush MemoryFlushConfig
 
 	// AutoCompact enables automatic context compaction for long sessions.
 	AutoCompact CompactConfig
@@ -386,6 +440,15 @@ func WithMaxSessions(n int) func(*Options) {
 		if n > 0 {
 			o.MaxSessions = n
 		}
+	}
+}
+
+// WithHistoryLimit sets the maximum number of user turns to load from persisted
+// history. Older turns are dropped before the context is sent to the model.
+// Values <= 0 disable the limit (all history is loaded).
+func WithHistoryLimit(n int) func(*Options) {
+	return func(o *Options) {
+		o.HistoryLimit = n
 	}
 }
 
@@ -725,13 +788,12 @@ func defaultHookRecorder() *hookRecorder {
 type runtimeHookAdapter struct {
 	executor *corehooks.Executor
 	recorder HookRecorder
-	
+
 	// Real-time event tracking (if callback is set)
-	realtimeCallback  func(RealtimeEvent)
-	toolCallCount     int
-	consecutiveErrors int
-	lastErrorTool     string
-	
+	realtimeCallback func(RealtimeEvent)
+	progressInterval int // Send progress update every N tool calls (0 = use default)
+	toolCallCount    int
+
 	// Recent tool calls for progress updates (keep last 5)
 	recentCalls []toolCallRecord
 }
@@ -816,7 +878,7 @@ func (h *runtimeHookAdapter) PostToolUse(ctx context.Context, evt coreevents.Too
 	// Real-time event tracking (only if callback is set)
 	if h.realtimeCallback != nil {
 		h.toolCallCount++
-		
+
 		// Record this tool call
 		paramsJSON, _ := json.Marshal(evt.Params)
 		resultStr := ""
@@ -825,80 +887,34 @@ func (h *runtimeHookAdapter) PostToolUse(ctx context.Context, evt coreevents.Too
 				resultStr = s
 			}
 		}
-		
+
 		record := toolCallRecord{
 			name:   evt.Name,
 			params: string(paramsJSON),
 			result: resultStr,
 		}
-		
-		// Keep only last 5 calls
-		h.recentCalls = append(h.recentCalls, record)
-		if len(h.recentCalls) > 5 {
-			h.recentCalls = h.recentCalls[len(h.recentCalls)-5:]
-		}
-		
+
 		// Progress update every N tool calls
-		if h.toolCallCount%defaultProgressInterval == 0 {
-			// Build recent call summaries
-			var summaries []ToolCallSummary
-			for _, rec := range h.recentCalls {
-				// Truncate params and output
-				params := rec.params
-				if len(params) > 100 {
-					params = params[:100] + "..."
-				}
-				output := rec.result
-				if len(output) > 200 {
-					output = output[:200] + "..."
-				}
-				
-				summaries = append(summaries, ToolCallSummary{
-					Name:   rec.name,
-					Params: params,
-					Output: output,
-				})
+		interval := h.progressInterval
+		if interval <= 0 {
+			interval = defaultProgressInterval
+		}
+		if h.toolCallCount%interval == 0 {
+			// Only include the current call — no accumulation
+			params := record.params
+			if len(params) > 200 {
+				params = params[:200] + "..."
 			}
-			
 			h.realtimeCallback(RealtimeEvent{
-				Type:        RealtimeEventProgressUpdate,
-				Message:     fmt.Sprintf("⏳ 进行中... 已执行 %d 个操作（最近: %s）", h.toolCallCount, evt.Name),
-				Count:       h.toolCallCount,
-				LastTool:    evt.Name,
-				Timestamp:   time.Now(),
-				RecentCalls: summaries,
+				Type:      RealtimeEventProgressUpdate,
+				Count:     h.toolCallCount,
+				LastTool:  evt.Name,
+				Timestamp: time.Now(),
+				RecentCalls: []ToolCallSummary{{
+					Name:   record.name,
+					Params: params,
+				}},
 			})
-		}
-		
-		// Error guard - detect consecutive errors
-		isError := evt.Err != nil
-		if !isError {
-			// Check output for error markers
-			if output, ok := evt.Result.(string); ok {
-				for _, marker := range defaultErrorMarkers {
-					if strings.Contains(output, marker) {
-						isError = true
-						break
-					}
-				}
-			}
-		}
-		
-		if isError {
-			h.consecutiveErrors++
-			h.lastErrorTool = evt.Name
-			if h.consecutiveErrors >= defaultErrorThreshold {
-				h.realtimeCallback(RealtimeEvent{
-					Type:      RealtimeEventErrorGuard,
-					Message:   fmt.Sprintf("⚠️ 检测到连续 %d 次工具执行失败（最近: %s）。请检查错误信息并调整策略。", h.consecutiveErrors, h.lastErrorTool),
-					Count:     h.consecutiveErrors,
-					LastTool:  h.lastErrorTool,
-					Timestamp: time.Now(),
-				})
-				h.consecutiveErrors = 0 // Reset after warning
-			}
-		} else {
-			h.consecutiveErrors = 0 // Reset on success
 		}
 	}
 	

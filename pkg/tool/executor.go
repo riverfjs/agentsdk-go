@@ -110,8 +110,8 @@ func (e *Executor) Execute(ctx context.Context, call Call) (*CallResult, error) 
 			e.logger.Warnf("[tool] %s ✗ %v", call.Name, execErr)
 		} else if res != nil && res.Output != "" {
 			output := strings.ReplaceAll(res.Output, "\n", " ")
-			if len(output) > 200 {
-				output = output[:200] + "..."
+			if len(output) > 1000 {
+				output = output[:1000] + "..."
 			}
 			e.logger.Infof("[tool] %s ✓ %s", call.Name, output)
 		}

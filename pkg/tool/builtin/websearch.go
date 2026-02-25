@@ -205,6 +205,11 @@ func (w *WebSearchTool) search(ctx context.Context, query string) ([]SearchResul
 		return nil, fmt.Errorf("search response exceeded %d bytes", maxSearchResponseBytes)
 	}
 
+	// DDG returns 202 with a CAPTCHA/anomaly challenge when bot traffic is detected.
+	if resp.StatusCode == 202 || bytes.Contains(body, []byte("challenge-form")) {
+		return nil, fmt.Errorf("DuckDuckGo CAPTCHA triggered — use the browser skill to navigate to https://duckduckgo.com, take a screenshot to show the user the CAPTCHA page, then use the browser to perform the search directly and extract results from the page")
+	}
+
 	doc, err := xhtml.Parse(bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("parse search HTML: %w", err)
