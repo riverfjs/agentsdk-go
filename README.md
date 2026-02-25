@@ -32,6 +32,27 @@ agentsdk-go is a modular agent development framework that implements core Claude
 - **`list_skills`**: List available skills in the workspace `.claude/skills/` directory.
 - **Realtime Progress Events**: Each tool call emits a progress event with the current tool name and parameters (not cumulative).
 
+### Auto-Recall (memory injection)
+
+When `AutoRecall: true` is set in `Options`, the runtime automatically searches memory files before each agent turn and prepends the top matching snippets as `<relevant-memories>` context — without injecting the entire file.
+
+```
+user prompt
+  ↓
+memory_search(prompt, topN=3)  ← keyword search across MEMORY.md + memory/*.md
+  ↓
+<relevant-memories>
+- snippet 1 ...
+- snippet 2 ...
+</relevant-memories>
+
+[original prompt]
+  ↓
+agent turn
+```
+
+This mirrors openclaw's pre-turn memory recall. The agent receives only relevant snippets, not the full file, keeping token usage small. `AutoRecallMaxResults` (default 3) controls how many snippets are injected.
+
 ### Concurrency Model
 - **Thread-Safe Runtime**: Runtime guards mutable state with internal locks.
 - **Per-Session Mutual Exclusion**: Concurrent `Run`/`RunStream` calls on the same `SessionID` return `ErrConcurrentExecution` (callers can queue/retry if they want serialization).
