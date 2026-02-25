@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/model"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
 type requestPayload struct {

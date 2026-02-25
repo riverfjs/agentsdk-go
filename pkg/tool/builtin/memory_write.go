@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
 const memoryWriteDescription = `Write or append content to a memory file (MEMORY.md or memory/YYYY-MM-DD.md).

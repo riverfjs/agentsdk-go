@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/tasks"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/tasks"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
 const taskGetDescription = "Retrieve a task by ID with full block/blocker details."

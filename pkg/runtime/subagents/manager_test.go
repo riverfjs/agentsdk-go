@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/skills"
 )
 
 func taskDispatchCtx() context.Context {

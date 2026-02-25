@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/subagents"
-	"github.com/cexll/agentsdk-go/pkg/runtime/tasks"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/subagents"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/tasks"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
 func TestTaskToolMetadata(t *testing.T) {

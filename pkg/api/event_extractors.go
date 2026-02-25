@@ -8,7 +8,7 @@ import (
 
 	"github.com/tidwall/gjson"
 
-	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
+	coreevents "github.com/riverfjs/agentsdk-go/pkg/core/events"
 )
 
 // extractSpecialEvents scans PostToolUse events and generates special events

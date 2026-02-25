@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/api"
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
+	"github.com/riverfjs/agentsdk-go/pkg/api"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/skills"
 )
 
 func buildSkills() []api.SkillRegistration {

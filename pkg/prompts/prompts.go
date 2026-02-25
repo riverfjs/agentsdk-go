@@ -18,10 +18,10 @@ package prompts
 import (
 	"io/fs"
 
-	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
-	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
-	"github.com/cexll/agentsdk-go/pkg/runtime/subagents"
+	corehooks "github.com/riverfjs/agentsdk-go/pkg/core/hooks"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/commands"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/skills"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/subagents"
 )
 
 // Builtins contains all registration structures parsed from an embed.FS.

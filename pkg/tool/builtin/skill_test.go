@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/skills"
 )
 
 func TestSkillToolExecutesSkill(t *testing.T) {

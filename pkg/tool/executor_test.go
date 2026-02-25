@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/sandbox"
-	"github.com/cexll/agentsdk-go/pkg/security"
+	"github.com/riverfjs/agentsdk-go/pkg/sandbox"
+	"github.com/riverfjs/agentsdk-go/pkg/security"
 )
 
 type stubTool struct {

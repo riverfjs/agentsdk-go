@@ -6,7 +6,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/skills"
 )
 
 func TestParseSkills(t *testing.T) {

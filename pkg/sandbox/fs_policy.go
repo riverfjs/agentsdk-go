@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cexll/agentsdk-go/pkg/security"
+	"github.com/riverfjs/agentsdk-go/pkg/security"
 )
 
 // FileSystemAllowList enforces path boundaries using PathResolver to block traversal and symlinks.

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/core/events"
+	"github.com/riverfjs/agentsdk-go/pkg/core/events"
 )
 
 func TestExecutorWithWorkDirAndClose(t *testing.T) {

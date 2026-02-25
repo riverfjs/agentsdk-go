@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/subagents"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/subagents"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
 const taskToolDescription = `Launch a new agent to handle complex, multi-step tasks autonomously. 

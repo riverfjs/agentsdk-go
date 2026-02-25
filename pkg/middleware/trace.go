@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/skills"
 )
 
 // TraceMiddleware records middleware activity per session and renders a

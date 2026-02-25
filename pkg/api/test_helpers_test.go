@@ -3,7 +3,7 @@ package api
 import (
 	"strings"
 
-	"github.com/cexll/agentsdk-go/pkg/message"
+	"github.com/riverfjs/agentsdk-go/pkg/message"
 )
 
 func msgWithTokens(role string, tokens int) message.Message {

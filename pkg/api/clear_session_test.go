@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/message"
-	"github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/message"
+	"github.com/riverfjs/agentsdk-go/pkg/model"
 )
 
 func TestRuntime_ClearSession_Success(t *testing.T) {

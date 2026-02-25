@@ -3,7 +3,7 @@ package agent
 import (
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/middleware"
+	"github.com/riverfjs/agentsdk-go/pkg/middleware"
 )
 
 // Options controls runtime behavior of the Agent.

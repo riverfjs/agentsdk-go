@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/tasks"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/tasks"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
 const taskUpdateDescription = "Update a task's status, owner, and dependencies. Use delete=true to delete tasks."

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/model"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
 // TraceEvent captures a single middleware hook invocation and its payloads.

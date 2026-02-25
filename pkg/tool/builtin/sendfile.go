@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
 const sendFileDescription = `Use this tool to send files (images, documents, etc.) to the user during execution. 

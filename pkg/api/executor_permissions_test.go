@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/subagents"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/subagents"
 )
 
 func TestRuntimeToolExecutorIsAllowedRespectsWhitelists(t *testing.T) {

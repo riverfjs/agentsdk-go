@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
 // StreamExecute runs the bash command while emitting incremental output. It

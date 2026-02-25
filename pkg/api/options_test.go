@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/middleware"
+	"github.com/riverfjs/agentsdk-go/pkg/middleware"
 )
 
 func TestOptionsWithDefaults(t *testing.T) {

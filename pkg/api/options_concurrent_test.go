@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/model"
 )
 
 func TestOptionsFrozenPreventsExternalMutationRaces(t *testing.T) {

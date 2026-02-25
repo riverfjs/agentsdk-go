@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/cexll/agentsdk-go/pkg/tool"
-	toolbuiltin "github.com/cexll/agentsdk-go/pkg/tool/builtin"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
+	toolbuiltin "github.com/riverfjs/agentsdk-go/pkg/tool/builtin"
 )
 
 func main() {

@@ -9,9 +9,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/api"
-	"github.com/cexll/agentsdk-go/pkg/config"
-	modelpkg "github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/api"
+	"github.com/riverfjs/agentsdk-go/pkg/config"
+	modelpkg "github.com/riverfjs/agentsdk-go/pkg/model"
 )
 
 func main() {

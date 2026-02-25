@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/mcp"
+	"github.com/riverfjs/agentsdk-go/pkg/mcp"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 )
 

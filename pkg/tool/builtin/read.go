@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cexll/agentsdk-go/pkg/security"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/security"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
 const (

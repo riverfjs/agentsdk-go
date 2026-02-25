@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/cexll/agentsdk-go/pkg/middleware"
-	"github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/middleware"
+	"github.com/riverfjs/agentsdk-go/pkg/model"
 )
 
 var (

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
+	coreevents "github.com/riverfjs/agentsdk-go/pkg/core/events"
 )
 
 func TestRuntimePrepare_PrecheckCompactsHistory(t *testing.T) {

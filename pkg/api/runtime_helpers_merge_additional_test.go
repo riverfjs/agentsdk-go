@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
-	"github.com/cexll/agentsdk-go/pkg/runtime/subagents"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/commands"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/skills"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/subagents"
 )
 
 func TestMergeSubagentRegistrationsValidatesAndOverrides(t *testing.T) {

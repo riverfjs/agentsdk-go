@@ -6,9 +6,9 @@ import (
 	"reflect"
 	"testing"
 
-	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
-	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	coreevents "github.com/riverfjs/agentsdk-go/pkg/core/events"
+	corehooks "github.com/riverfjs/agentsdk-go/pkg/core/hooks"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
 func TestWithMaxSessionsRespectsPositiveOnly(t *testing.T) {

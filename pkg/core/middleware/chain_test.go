@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/core/events"
+	"github.com/riverfjs/agentsdk-go/pkg/core/events"
 )
 
 func TestChainOrdersMiddlewares(t *testing.T) {

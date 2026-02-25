@@ -6,15 +6,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/agent"
-	"github.com/cexll/agentsdk-go/pkg/message"
-	"github.com/cexll/agentsdk-go/pkg/model"
-	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
-	"github.com/cexll/agentsdk-go/pkg/runtime/subagents"
-	"github.com/cexll/agentsdk-go/pkg/sandbox"
-	"github.com/cexll/agentsdk-go/pkg/tool"
-	toolbuiltin "github.com/cexll/agentsdk-go/pkg/tool/builtin"
+	"github.com/riverfjs/agentsdk-go/pkg/agent"
+	"github.com/riverfjs/agentsdk-go/pkg/message"
+	"github.com/riverfjs/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/commands"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/skills"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/subagents"
+	"github.com/riverfjs/agentsdk-go/pkg/sandbox"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
+	toolbuiltin "github.com/riverfjs/agentsdk-go/pkg/tool/builtin"
 )
 
 func TestRunStreamProducesEvents(t *testing.T) {

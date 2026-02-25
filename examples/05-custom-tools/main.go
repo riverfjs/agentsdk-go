@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/cexll/agentsdk-go/pkg/api"
-	"github.com/cexll/agentsdk-go/pkg/model"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/api"
+	"github.com/riverfjs/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
 // EchoTool is a simple custom tool used for demonstration.

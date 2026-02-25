@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/logger"
-	"github.com/cexll/agentsdk-go/pkg/message"
-	"github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/logger"
+	"github.com/riverfjs/agentsdk-go/pkg/message"
+	"github.com/riverfjs/agentsdk-go/pkg/model"
 )
 
 type compactStubModel struct {

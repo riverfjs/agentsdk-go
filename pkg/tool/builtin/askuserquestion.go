@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
 const askUserQuestionDescription = `Use this tool when you need to ask the user questions during execution. This allows you to:

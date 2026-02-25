@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cexll/agentsdk-go/pkg/api"
-	modelpkg "github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/api"
+	modelpkg "github.com/riverfjs/agentsdk-go/pkg/model"
 )
 
 const defaultModel = "claude-sonnet-4-5-20250929"

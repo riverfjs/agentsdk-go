@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/api"
-	"github.com/cexll/agentsdk-go/pkg/model"
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
-	"github.com/cexll/agentsdk-go/pkg/runtime/subagents"
-	"github.com/cexll/agentsdk-go/pkg/tool"
-	toolbuiltin "github.com/cexll/agentsdk-go/pkg/tool/builtin"
+	"github.com/riverfjs/agentsdk-go/pkg/api"
+	"github.com/riverfjs/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/skills"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/subagents"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
+	toolbuiltin "github.com/riverfjs/agentsdk-go/pkg/tool/builtin"
 )
 
 func TestTaskIntegration_NoTaskTool_NoDispatch(t *testing.T) {

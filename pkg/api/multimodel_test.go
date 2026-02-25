@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/model"
 )
 
 // mockModel implements model.Model for testing

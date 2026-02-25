@@ -6,12 +6,12 @@ import (
 	"testing"
 	_ "unsafe"
 
-	"github.com/cexll/agentsdk-go/pkg/logger"
-	"github.com/cexll/agentsdk-go/pkg/mcp"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/logger"
+	"github.com/riverfjs/agentsdk-go/pkg/mcp"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
-//go:linkname patchedNewMCPClient github.com/cexll/agentsdk-go/pkg/tool.newMCPClient
+//go:linkname patchedNewMCPClient github.com/riverfjs/agentsdk-go/pkg/tool.newMCPClient
 var patchedNewMCPClient func(ctx context.Context, spec string, handler func(context.Context, *mcp.ClientSession)) (*mcp.ClientSession, error)
 
 type mcpCallCounter struct {

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/core/events"
-	"github.com/cexll/agentsdk-go/pkg/core/middleware"
+	"github.com/riverfjs/agentsdk-go/pkg/core/events"
+	"github.com/riverfjs/agentsdk-go/pkg/core/middleware"
 	"github.com/stretchr/testify/require"
 )
 

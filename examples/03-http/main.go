@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/api"
-	modelpkg "github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/api"
+	modelpkg "github.com/riverfjs/agentsdk-go/pkg/model"
 )
 
 const (

@@ -3,14 +3,14 @@ package api
 import (
 	"testing"
 
-	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
-	coremw "github.com/cexll/agentsdk-go/pkg/core/middleware"
-	"github.com/cexll/agentsdk-go/pkg/middleware"
-	"github.com/cexll/agentsdk-go/pkg/model"
-	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
-	"github.com/cexll/agentsdk-go/pkg/runtime/subagents"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	corehooks "github.com/riverfjs/agentsdk-go/pkg/core/hooks"
+	coremw "github.com/riverfjs/agentsdk-go/pkg/core/middleware"
+	"github.com/riverfjs/agentsdk-go/pkg/middleware"
+	"github.com/riverfjs/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/commands"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/skills"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/subagents"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
 func TestOptionsFrozenClonesCollections(t *testing.T) {

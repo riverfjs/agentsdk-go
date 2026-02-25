@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
+	coreevents "github.com/riverfjs/agentsdk-go/pkg/core/events"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

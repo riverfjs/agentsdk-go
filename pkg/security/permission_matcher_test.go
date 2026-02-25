@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/config"
+	"github.com/riverfjs/agentsdk-go/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 

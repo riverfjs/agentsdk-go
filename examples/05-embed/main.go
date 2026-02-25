@@ -7,8 +7,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/cexll/agentsdk-go/pkg/api"
-	"github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/api"
+	"github.com/riverfjs/agentsdk-go/pkg/model"
 )
 
 //go:embed .claude

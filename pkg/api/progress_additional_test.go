@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/agent"
-	"github.com/cexll/agentsdk-go/pkg/middleware"
+	"github.com/riverfjs/agentsdk-go/pkg/agent"
+	"github.com/riverfjs/agentsdk-go/pkg/middleware"
 )
 
 func TestChunkString(t *testing.T) {

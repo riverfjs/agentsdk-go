@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/message"
+	"github.com/riverfjs/agentsdk-go/pkg/message"
 )
 
 func TestDiskHistoryPersisterSaveLoadAndCleanup(t *testing.T) {

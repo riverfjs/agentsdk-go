@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
-	"github.com/cexll/agentsdk-go/pkg/model"
+	coreevents "github.com/riverfjs/agentsdk-go/pkg/core/events"
+	"github.com/riverfjs/agentsdk-go/pkg/model"
 )
 
 type staticModel struct {

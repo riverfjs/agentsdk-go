@@ -1,6 +1,6 @@
 package message
 
-import "github.com/cexll/agentsdk-go/pkg/model"
+import "github.com/riverfjs/agentsdk-go/pkg/model"
 
 // Message represents a single conversational turn used within the message
 // package. It is purposefully minimal to keep the history layer independent

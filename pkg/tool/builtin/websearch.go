@@ -13,7 +13,7 @@ import (
 
 	xhtml "golang.org/x/net/html"
 
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
 const (

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/model"
 )
 
 func TestTokenTracker_RecordAndGetStats(t *testing.T) {

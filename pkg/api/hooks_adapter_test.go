@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
-	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
+	coreevents "github.com/riverfjs/agentsdk-go/pkg/core/events"
+	corehooks "github.com/riverfjs/agentsdk-go/pkg/core/hooks"
 )
 
 func TestPreToolUseAllowsInputModification(t *testing.T) {

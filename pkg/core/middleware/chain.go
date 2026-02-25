@@ -3,7 +3,7 @@ package middleware
 import (
 	"context"
 
-	"github.com/cexll/agentsdk-go/pkg/core/events"
+	"github.com/riverfjs/agentsdk-go/pkg/core/events"
 )
 
 // Handler is executed by the middleware chain. It operates on events and can

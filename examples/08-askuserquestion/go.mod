@@ -2,9 +2,9 @@ module example.com/askuserquestion
 
 go 1.25.3
 
-replace github.com/cexll/agentsdk-go => ../..
+replace github.com/riverfjs/agentsdk-go => ../..
 
-require github.com/cexll/agentsdk-go v0.0.0-00010101000000-000000000000
+require github.com/riverfjs/agentsdk-go v0.0.0-00010101000000-000000000000
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.18.0 // indirect

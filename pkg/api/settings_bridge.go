@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/cexll/agentsdk-go/pkg/config"
+	"github.com/riverfjs/agentsdk-go/pkg/config"
 )
 
 // loadSettings resolves settings.json using the new layered SettingsLoader and

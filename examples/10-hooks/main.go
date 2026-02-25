@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/cexll/agentsdk-go/pkg/api"
-	"github.com/cexll/agentsdk-go/pkg/core/events"
-	"github.com/cexll/agentsdk-go/pkg/core/hooks"
-	modelpkg "github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/api"
+	"github.com/riverfjs/agentsdk-go/pkg/core/events"
+	"github.com/riverfjs/agentsdk-go/pkg/core/hooks"
+	modelpkg "github.com/riverfjs/agentsdk-go/pkg/model"
 )
 
 func main() {

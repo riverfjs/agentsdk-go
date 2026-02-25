@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/config"
+	"github.com/riverfjs/agentsdk-go/pkg/config"
 	"gopkg.in/yaml.v3"
 )
 

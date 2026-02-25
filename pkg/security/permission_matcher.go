@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/config"
+	"github.com/riverfjs/agentsdk-go/pkg/config"
 )
 
 // PermissionAction represents the enforcement outcome for a tool invocation.

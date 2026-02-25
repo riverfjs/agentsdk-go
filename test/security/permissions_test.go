@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/sandbox"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/sandbox"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 	"github.com/stretchr/testify/require"
 )
 

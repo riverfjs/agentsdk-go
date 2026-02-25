@@ -3,7 +3,7 @@ package tool
 import (
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/sandbox"
+	"github.com/riverfjs/agentsdk-go/pkg/sandbox"
 )
 
 // Call captures a single tool invocation request.

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/mcp"
+	"github.com/riverfjs/agentsdk-go/pkg/mcp"
 )
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)

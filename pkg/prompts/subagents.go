@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/subagents"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/subagents"
 	"gopkg.in/yaml.v3"
 )
 

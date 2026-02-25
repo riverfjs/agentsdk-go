@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/tasks"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/tasks"
 )
 
 func TestTaskCreateToolMetadataAndSchema(t *testing.T) {

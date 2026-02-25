@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/mcp"
+	"github.com/riverfjs/agentsdk-go/pkg/mcp"
 )
 
 // Registry keeps the mapping between tool names and implementations.

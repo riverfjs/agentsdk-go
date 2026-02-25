@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
-	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
-	"github.com/cexll/agentsdk-go/pkg/logger"
-	"github.com/cexll/agentsdk-go/pkg/message"
-	"github.com/cexll/agentsdk-go/pkg/model"
+	coreevents "github.com/riverfjs/agentsdk-go/pkg/core/events"
+	corehooks "github.com/riverfjs/agentsdk-go/pkg/core/hooks"
+	"github.com/riverfjs/agentsdk-go/pkg/logger"
+	"github.com/riverfjs/agentsdk-go/pkg/message"
+	"github.com/riverfjs/agentsdk-go/pkg/model"
 )
 
 // CompactConfig controls automatic context compaction.

@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/message"
+	"github.com/riverfjs/agentsdk-go/pkg/message"
 )
 
 var benchShouldCompact bool

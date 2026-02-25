@@ -3,8 +3,8 @@ package api
 import (
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/config"
-	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
+	"github.com/riverfjs/agentsdk-go/pkg/config"
+	coreevents "github.com/riverfjs/agentsdk-go/pkg/core/events"
 )
 
 func TestBuildSettingsHooksNil(t *testing.T) {

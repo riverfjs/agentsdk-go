@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/core/events"
-	coremw "github.com/cexll/agentsdk-go/pkg/core/middleware"
+	"github.com/riverfjs/agentsdk-go/pkg/core/events"
+	coremw "github.com/riverfjs/agentsdk-go/pkg/core/middleware"
 )
 
 type hookBundle struct {

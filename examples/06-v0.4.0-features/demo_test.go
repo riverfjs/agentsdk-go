@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/api"
-	"github.com/cexll/agentsdk-go/pkg/config"
-	modelpkg "github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/api"
+	"github.com/riverfjs/agentsdk-go/pkg/config"
+	modelpkg "github.com/riverfjs/agentsdk-go/pkg/model"
 )
 
 // TestRulesConfiguration tests Feature 1: Rules Configuration

@@ -3,7 +3,7 @@ package hooks
 import (
 	"context"
 
-	"github.com/cexll/agentsdk-go/pkg/core/events"
+	"github.com/riverfjs/agentsdk-go/pkg/core/events"
 )
 
 // Individual hook interfaces allow hook implementations to opt-in to only the

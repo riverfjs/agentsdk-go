@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/riverfjs/agentsdk-go/pkg/tool"
 	"gopkg.in/yaml.v3"
 )
 

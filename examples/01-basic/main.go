@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/cexll/agentsdk-go/pkg/api"
-	"github.com/cexll/agentsdk-go/pkg/middleware"
-	modelpkg "github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/riverfjs/agentsdk-go/pkg/api"
+	"github.com/riverfjs/agentsdk-go/pkg/middleware"
+	modelpkg "github.com/riverfjs/agentsdk-go/pkg/model"
 )
 
 func main() {

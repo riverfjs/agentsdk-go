@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
+	"github.com/riverfjs/agentsdk-go/pkg/runtime/commands"
 )
 
 func TestLazyLoadStartupOnlyFrontmatter(t *testing.T) {
