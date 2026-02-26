@@ -613,6 +613,15 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 	// rather than its training-data cutoff when answering time-sensitive questions.
 	prompt = "[Current time: " + time.Now().Format("2006-01-02 15:04 MST") + "]\n" + prompt
 
+	// Inject available skills by scanning the filesystem on every request so the
+	// agent always knows what skills exist without calling list_skills, and new
+	// skills installed after startup are immediately visible (no restart needed).
+	if rt.opts.ProjectRoot != "" {
+		if skillsSnippet := buildSkillsSnippet(rt.opts.ProjectRoot); skillsSnippet != "" {
+			prompt = skillsSnippet + prompt
+		}
+	}
+
 	// Process attachments (convert to base64)
 	var msgAttachments []model.MessageAttachment
 	for _, att := range normalized.Attachments {
@@ -2154,3 +2163,25 @@ func loadImageAsBase64(filePath, mimeType string) (string, string, error) {
 	return encoded, mimeType, nil
 }
 
+// buildSkillsSnippet returns a compact skills-list string to prepend to every
+// prompt. It delegates to toolbuiltin.ScanSkillsList so frontmatter parsing
+// is not duplicated. Scanning the filesystem on each request is intentional:
+// new skills installed after startup are immediately visible without restart.
+func buildSkillsSnippet(projectRoot string) string {
+	list := toolbuiltin.ScanSkillsList(projectRoot)
+	if len(list) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("[Available skills (use the Skill tool to invoke):")
+	for _, s := range list {
+		b.WriteString("\n- ")
+		b.WriteString(s.Name)
+		if s.Description != "" {
+			b.WriteString(": ")
+			b.WriteString(s.Description)
+		}
+	}
+	b.WriteString("]\n")
+	return b.String()
+}

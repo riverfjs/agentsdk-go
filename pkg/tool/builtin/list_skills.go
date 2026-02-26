@@ -150,6 +150,44 @@ func (t *ListSkillsTool) Execute(ctx context.Context, params map[string]interfac
 	}, nil
 }
 
+// SkillSummary holds the minimal metadata needed to describe a skill.
+type SkillSummary struct {
+	Name        string
+	Description string
+}
+
+// ScanSkillsList reads {workspaceDir}/.claude/skills/*/SKILL.md and returns
+// name+description for every valid skill, sorted by name.
+// It is exported so that other packages (e.g. api) can inject the list into
+// prompts without duplicating frontmatter-parsing logic.
+func ScanSkillsList(workspaceDir string) []SkillSummary {
+	skillsDir := filepath.Join(workspaceDir, ".claude", "skills")
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		return nil
+	}
+	var out []SkillSummary
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		meta, err := readSkillFrontmatter(filepath.Join(skillsDir, e.Name(), "SKILL.md"))
+		if err != nil {
+			continue
+		}
+		name := strings.TrimSpace(meta.Name)
+		if name == "" {
+			name = e.Name()
+		}
+		out = append(out, SkillSummary{
+			Name:        name,
+			Description: strings.TrimSpace(meta.Description),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 // readSkillFrontmatter parses only the YAML frontmatter block from a SKILL.md file.
 func readSkillFrontmatter(path string) (listSkillEntry, error) {
 	data, err := os.ReadFile(path)
