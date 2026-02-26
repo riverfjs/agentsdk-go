@@ -609,6 +609,10 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 		normalized.RequestID = uuid.New().String()
 	}
 
+	// Save the raw user message before any injections so auto-recall searches
+	// what the user actually said, not the enriched prompt with skill names etc.
+	rawUserPrompt := prompt
+
 	// Always prepend the real current date/time so the model uses the actual clock
 	// rather than its training-data cutoff when answering time-sensitive questions.
 	prompt = "[Current time: " + time.Now().Format("2006-01-02 15:04 MST") + "]\n" + prompt
@@ -724,7 +728,7 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 		if maxR <= 0 {
 			maxR = 3
 		}
-		if results, _ := toolbuiltin.SearchMemory(rt.opts.ProjectRoot, prompt, maxR); len(results) > 0 {
+		if results, _ := toolbuiltin.SearchMemory(rt.opts.ProjectRoot, rawUserPrompt, maxR); len(results) > 0 {
 			var sb strings.Builder
 			sb.WriteString("<relevant-memories>\n")
 			sb.WriteString("The following memories may be relevant to this conversation:\n")

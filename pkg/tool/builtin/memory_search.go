@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	memorySearchChunkSize    = 400 // target tokens per chunk (~4 chars/token estimate)
+	memorySearchChunkSize    = 400  // target tokens per chunk (~4 chars/token estimate)
 	memorySearchChunkOverlap = 80
-	memorySearchSnippetMax   = 700 // chars returned per result
+	memorySearchSnippetMax   = 700  // chars returned per result
 	memorySearchDefaultMax   = 5
+	memorySearchMinScore     = 0.5  // minimum score to include a chunk (filters accidental keyword hits)
 
 	memorySearchDescription = `Mandatory recall step: semantically search MEMORY.md + memory/*.md before answering questions about prior work, decisions, dates, people, preferences, or todos.
 
@@ -124,7 +125,7 @@ func (t *MemorySearchTool) Execute(ctx context.Context, params map[string]interf
 	// Filter non-zero and sort by score descending
 	var scored []MemoryChunk
 	for _, c := range allChunks {
-		if c.Score > 0 {
+		if c.Score >= memorySearchMinScore {
 			scored = append(scored, c)
 		}
 	}
@@ -242,12 +243,20 @@ func chunkFile(filePath, relPath string) ([]MemoryChunk, error) {
 }
 
 // tokenize lowercases and splits text into word tokens, removing punctuation.
+// CJK characters are each emitted as individual tokens (no space-based segmentation).
 func tokenize(text string) []string {
 	text = strings.ToLower(text)
 	var tokens []string
 	var cur strings.Builder
 	for _, r := range text {
-		if isWordChar(r) {
+		if isCJK(r) {
+			// flush current ASCII token first
+			if cur.Len() > 0 {
+				tokens = append(tokens, cur.String())
+				cur.Reset()
+			}
+			tokens = append(tokens, string(r))
+		} else if isWordChar(r) {
 			cur.WriteRune(r)
 		} else {
 			if cur.Len() > 0 {
@@ -263,7 +272,18 @@ func tokenize(text string) []string {
 }
 
 func isWordChar(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-'
+	// ASCII word chars
+	if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+		return true
+	}
+	// CJK Unified Ideographs — treat each character as its own token boundary
+	// (handled separately in tokenize via isCJK)
+	return false
+}
+
+// isCJK reports whether r is a CJK unified ideograph (basic block).
+func isCJK(r rune) bool {
+	return r >= '\u4e00' && r <= '\u9fff'
 }
 
 // scoreChunk computes a relevance score for a chunk given query tokens.
@@ -361,7 +381,7 @@ func SearchMemory(workspaceDir, query string, maxResults int) ([]MemoryChunk, er
 
 	var scored []MemoryChunk
 	for _, c := range allChunks {
-		if c.Score > 0 {
+		if c.Score >= memorySearchMinScore {
 			scored = append(scored, c)
 		}
 	}

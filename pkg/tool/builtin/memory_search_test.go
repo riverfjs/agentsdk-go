@@ -244,6 +244,107 @@ func TestSearchMemoryNoFiles(t *testing.T) {
 	}
 }
 
+// ── CJK tokenization ─────────────────────────────────────────────────────────
+
+func TestTokenizeCJK(t *testing.T) {
+	cases := []struct {
+		input string
+		want  []string
+	}{
+		// Pure Chinese — each character is its own token
+		{"你好", []string{"你", "好"}},
+		// Mixed Chinese + English
+		{"flight-monitor 监控", []string{"flight-monitor", "监", "控"}},
+		// Chinese with punctuation (punctuation is separator)
+		{"查机票，选航班", []string{"查", "机", "票", "选", "航", "班"}},
+		// Only ASCII punctuation — no tokens
+		{"!!! ???", nil},
+	}
+	for _, tc := range cases {
+		got := tokenize(tc.input)
+		if len(got) != len(tc.want) {
+			t.Errorf("tokenize(%q): got %v (len=%d), want %v (len=%d)",
+				tc.input, got, len(got), tc.want, len(tc.want))
+			continue
+		}
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Errorf("tokenize(%q)[%d]: got %q, want %q", tc.input, i, got[i], tc.want[i])
+			}
+		}
+	}
+}
+
+// TestSearchMemoryChineseQuery verifies that a Chinese-language query can find
+// Chinese content in memory files (regression for ASCII-only tokenizer bug).
+func TestSearchMemoryChineseQuery(t *testing.T) {
+	dir := t.TempDir()
+	writeMemoryFile(t, dir, "memory/2026-02-24.md",
+		"# 2026-02-24\n用户偏好中文交流\n项目路径是 ~/Documents/chatbot\n已安装 flight-monitor 技能")
+
+	results, err := SearchMemory(dir, "用户偏好", 3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected results for Chinese query matching Chinese memory, got none")
+	}
+	if results[0].Score <= 0 {
+		t.Fatalf("expected positive score, got %f", results[0].Score)
+	}
+}
+
+// TestSearchMemoryChineseQueryNoFalsePositive verifies that a Chinese query does NOT
+// match a memory file with unrelated content (old ASCII-only bug caused random injection).
+func TestSearchMemoryChineseQueryNoFalsePositive(t *testing.T) {
+	dir := t.TempDir()
+	// Content contains only ASCII words, no Chinese
+	writeMemoryFile(t, dir, "memory/2026-02-24.md",
+		"flight-monitor check-all browser automation playwright")
+
+	// Pure Chinese query — the old bug would return score=0 for all chunks
+	// (empty tokens), but SearchMemory would still inject if somehow matched.
+	// With the fix, empty-token Chinese query should return nothing.
+	// NOTE: after CJK fix, "你好" tokenizes to ["你","好"]; those chars
+	// don't appear in the ASCII-only content, so score should still be 0.
+	results, err := SearchMemory(dir, "你好", 3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no results for unrelated Chinese query, got %d: %+v", len(results), results)
+	}
+}
+
+// TestSearchMemorySkillsSnippetPollution simulates the bug where the enriched
+// prompt (with skill names prepended) was passed to SearchMemory instead of
+// the raw user message. A "你好" query enriched with skill names should NOT
+// recall flight-monitor memories when the raw query is "你好".
+func TestSearchMemorySkillsSnippetPollution(t *testing.T) {
+	dir := t.TempDir()
+	writeMemoryFile(t, dir, "memory/2026-02-24.md",
+		"flight-monitor 每6小时检查价格\nbrowser automation\nflight-search skill")
+
+	// Simulated enriched prompt (what was wrongly passed before the fix)
+	enriched := "[Available skills:\n- browser\n- flight-search\n- flight-monitor]\n[Current time: 2026-02-26]\n你好"
+	rawUser := "你好"
+
+	enrichedResults, _ := SearchMemory(dir, enriched, 3)
+	rawResults, _ := SearchMemory(dir, rawUser, 3)
+
+	// The enriched prompt incorrectly finds flight-monitor content
+	if len(enrichedResults) == 0 {
+		t.Log("enriched prompt returned no results (unexpected, but acceptable)")
+	} else {
+		t.Logf("enriched prompt returned %d result(s) — this is the bug we fixed", len(enrichedResults))
+	}
+
+	// The raw "你好" should not match flight-monitor content
+	if len(rawResults) != 0 {
+		t.Errorf("raw '你好' query should not match flight-monitor content, got %d result(s)", len(rawResults))
+	}
+}
+
 // ── collectMemoryFiles ────────────────────────────────────────────────────────
 
 func TestCollectMemoryFiles(t *testing.T) {
