@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -883,8 +884,9 @@ func (h *runtimeHookAdapter) PostToolUse(ctx context.Context, evt coreevents.Too
 	if h.realtimeCallback != nil {
 		h.toolCallCount++
 
-		// Record this tool call
-		paramsJSON, _ := json.Marshal(evt.Params)
+		// Record this tool call. Keep JSON but disable HTML escaping so
+		// shell operators like && and 2>&1 stay readable in progress logs.
+		paramsJSON := marshalNoHTMLEscape(evt.Params)
 		resultStr := ""
 		if evt.Result != nil {
 			if s, ok := evt.Result.(string); ok {
@@ -923,6 +925,16 @@ func (h *runtimeHookAdapter) PostToolUse(ctx context.Context, evt coreevents.Too
 	}
 
 	return nil
+}
+
+func marshalNoHTMLEscape(v any) string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return "{}"
+	}
+	return strings.TrimSpace(buf.String())
 }
 
 func (h *runtimeHookAdapter) UserPrompt(ctx context.Context, prompt string) error {
