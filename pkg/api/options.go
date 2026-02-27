@@ -43,6 +43,9 @@ const (
 	RealtimeEventProgressUpdate    RealtimeEventType = "progress_update"     // Progress report during execution
 	RealtimeEventErrorGuard        RealtimeEventType = "error_guard"         // Error threshold reached
 	RealtimeEventContextWindowWarn RealtimeEventType = "context_window_warn" // Context window approaching limit
+	RealtimeEventMemoryFlushStart  RealtimeEventType = "memory_flush_start"  // Automatic memory flush started
+	RealtimeEventMemoryFlushDone   RealtimeEventType = "memory_flush_done"   // Automatic memory flush completed
+	RealtimeEventMemoryFlushFailed RealtimeEventType = "memory_flush_failed" // Automatic memory flush failed
 )
 
 // Real-time event configuration (hardcoded defaults)
@@ -57,7 +60,9 @@ type RealtimeEvent struct {
 	Count     int               // Tool count (for progress) or error count (for error guard)
 	LastTool  string            // Name of the most recent tool
 	Timestamp time.Time         // When the event occurred
-	
+	SessionID string            // Optional session identifier
+	Metadata  map[string]any    // Optional structured payload
+
 	// Recent tool calls with details (for progress updates)
 	RecentCalls []ToolCallSummary
 }
@@ -182,7 +187,7 @@ func (fn ModelFactoryFunc) Model(ctx context.Context) (model.Model, error) {
 }
 
 // MemoryFlushConfig controls automatic memory flush before context window exhaustion.
-// Flush fires when inputTokens >= ContextWindowTokens - ReserveTokensFloor - SoftThresholdTokens.
+// Flush fires when estimated session tokens >= ContextWindowTokens - ReserveTokensFloor - SoftThresholdTokens.
 // With defaults and a 200k context window this triggers at ~176k tokens (88%), matching openclaw.
 type MemoryFlushConfig struct {
 	// Enabled turns memory flush on or off. Default false.
@@ -245,7 +250,6 @@ type Options struct {
 	// Keeping this small reduces token usage and encourages use of memory tools.
 	HistoryLimit int
 
-
 	// Real-time event callback for progress updates during execution.
 	// Triggered synchronously every ProgressInterval tool calls.
 	// Default behavior (if nil): no real-time events, only post-execution events in Response.HookEvents.
@@ -259,7 +263,7 @@ type Options struct {
 	// When true, the runtime searches MEMORY.md + memory/*.md using the user's
 	// prompt and prepends the top results as <relevant-memories> context.
 	// This ensures the agent always has relevant past context without needing
-	// to decide whether to call memory_search itself.
+	// to decide whether to call MemorySearch itself.
 	AutoRecall bool
 
 	// AutoRecallMaxResults controls how many memory snippets are injected.
@@ -318,7 +322,7 @@ type Options struct {
 
 	// ContextWindowTokens is the total context window size in tokens for the configured model.
 	// When set to > 0, enables the Context Window Guard which warns when approaching the limit
-	// and rejects requests when estimated remaining tokens fall below ContextWindowHardMinTokens.
+	// and emits pressure signals when estimated remaining tokens fall below ContextWindowHardMinTokens.
 	// Must be configured manually when using self-hosted proxies that don't advertise context size.
 	// Common values: 200000 (Claude 3.5/3.7 Sonnet), 128000 (GPT-4o), 32000 (smaller models).
 	ContextWindowTokens int
@@ -327,8 +331,8 @@ type Options struct {
 	// 0 or unset defaults to 0.8 (warn when more than 80% of context window is estimated used).
 	ContextWindowWarnRatio float64
 
-	// ContextWindowHardMinTokens is the minimum estimated remaining tokens below which the agent
-	// rejects the request with a user-facing message advising /reset.
+	// ContextWindowHardMinTokens is the minimum estimated remaining tokens below which the runtime
+	// raises an internal pressure signal (no user-facing reset instructions).
 	// 0 or unset defaults to 2000.
 	ContextWindowHardMinTokens int
 
@@ -390,15 +394,15 @@ type Attachment struct {
 // Response aggregates the final agent result together with metadata emitted
 // by the unified runtime pipeline (skills/commands/hooks/etc.).
 type Response struct {
-	Mode           ModeContext
-	RequestID      string `json:"request_id,omitempty"` // UUID for distributed tracing
-	Result         *Result
-	SkillResults   []SkillExecution
-	CommandResults []CommandExecution
-	Subagent       *subagents.Result
-	HookEvents     []coreevents.Event
-	ProjectConfig  *config.Settings
-	Settings       *config.Settings
+	Mode            ModeContext
+	RequestID       string `json:"request_id,omitempty"` // UUID for distributed tracing
+	Result          *Result
+	SkillResults    []SkillExecution
+	CommandResults  []CommandExecution
+	Subagent        *subagents.Result
+	HookEvents      []coreevents.Event
+	ProjectConfig   *config.Settings
+	Settings        *config.Settings
 	SandboxSnapshot SandboxReport
 	Tags            map[string]string
 }
@@ -527,7 +531,7 @@ func (o Options) withDefaults() Options {
 	if o.MaxSessions <= 0 {
 		o.MaxSessions = defaultMaxSessions
 	}
-	
+
 	return o
 }
 
@@ -874,7 +878,7 @@ func (h *runtimeHookAdapter) PostToolUse(ctx context.Context, evt coreevents.Too
 			return fmt.Errorf("hooks: PostToolUse hook requested stop: %s", res.Output.StopReason)
 		}
 	}
-	
+
 	// Real-time event tracking (only if callback is set)
 	if h.realtimeCallback != nil {
 		h.toolCallCount++
@@ -917,7 +921,7 @@ func (h *runtimeHookAdapter) PostToolUse(ctx context.Context, evt coreevents.Too
 			})
 		}
 	}
-	
+
 	return nil
 }
 

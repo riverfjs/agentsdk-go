@@ -212,7 +212,15 @@ func TestRegisterToolsUsesDefaultImplementations(t *testing.T) {
 		t.Fatal("expected task tool to be registered")
 	}
 	tools := registry.List()
-	expected := []string{"Bash", "Read", "Write", "Edit", "WebFetch", "WebSearch", "BashOutput", "BashStatus", "KillTask", "TaskCreate", "TaskList", "TaskGet", "TaskUpdate", "AskUserQuestion", "Skill", "SlashCommand", "Grep", "Glob", "Task"}
+	expected := []string{
+		"Bash", "Read", "Write", "Edit",
+		"WebFetch", "WebSearch", "BashOutput", "BashStatus",
+		"KillTask", "TaskCreate", "TaskList", "TaskGet", "TaskUpdate",
+		"AskUserQuestion", "SendFile", "Skill", "SlashCommand",
+		"Grep", "Glob",
+		"MemorySearch", "MemoryGet", "MemoryWrite",
+		"ListSkills", "Task",
+	}
 	if len(tools) != len(expected) {
 		t.Fatalf("expected %d default tools, got %d", len(expected), len(tools))
 	}
@@ -363,8 +371,8 @@ func TestRegisterToolsTaskNotAddedForCI(t *testing.T) {
 	if _, ok := seen["Task"]; ok {
 		t.Fatal("Task tool should be absent in CI mode")
 	}
-	if len(seen) != 18 { // all built-ins except Task
-		t.Fatalf("expected 18 built-ins without Task, got %d", len(seen))
+	if len(seen) != 23 { // all built-ins except Task
+		t.Fatalf("expected 23 built-ins without Task, got %d", len(seen))
 	}
 }
 

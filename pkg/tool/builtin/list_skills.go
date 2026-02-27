@@ -47,7 +47,7 @@ func NewListSkillsTool(workspaceDir string) *ListSkillsTool {
 	return &ListSkillsTool{workspaceDir: workspaceDir}
 }
 
-func (t *ListSkillsTool) Name() string        { return "list_skills" }
+func (t *ListSkillsTool) Name() string        { return "ListSkills" }
 func (t *ListSkillsTool) Description() string { return listSkillsDescription }
 func (t *ListSkillsTool) Schema() *tool.JSONSchema { return listSkillsSchema }
 
@@ -67,7 +67,7 @@ func (t *ListSkillsTool) Execute(ctx context.Context, params map[string]interfac
 				Data:    map[string]interface{}{"skills": []interface{}{}},
 			}, nil
 		}
-		return nil, fmt.Errorf("list_skills: read dir: %w", err)
+		return nil, fmt.Errorf("ListSkills: read dir: %w", err)
 	}
 
 	type skillInfo struct {

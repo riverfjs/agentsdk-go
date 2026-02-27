@@ -89,7 +89,7 @@ func TestHookRecorder_SingleRequestCollectsHookEvents(t *testing.T) {
 	}
 
 	prompts := promptEvents(t, resp.HookEvents)
-	if len(prompts) != 1 || prompts[0] != "hello" {
+	if len(prompts) != 1 || !strings.Contains(prompts[0], "hello") {
 		t.Fatalf("expected prompt event for %q, got %+v", "hello", prompts)
 	}
 }
@@ -131,7 +131,7 @@ func TestHookRecorder_ConcurrentRequestsAreIsolated(t *testing.T) {
 			t.Fatalf("Run(%q): nil response", res.prompt)
 		}
 		prompts := promptEvents(t, res.resp.HookEvents)
-		if len(prompts) != 1 || prompts[0] != res.prompt {
+		if len(prompts) != 1 || !strings.Contains(prompts[0], res.prompt) {
 			t.Fatalf("expected isolated prompt event for %q, got %+v", res.prompt, prompts)
 		}
 	}

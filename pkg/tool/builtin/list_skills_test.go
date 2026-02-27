@@ -30,7 +30,7 @@ func skillsDir(workspaceDir string) string {
 
 func TestListSkillsMetadata(t *testing.T) {
 	tool := NewListSkillsTool("/tmp")
-	if tool.Name() != "list_skills" {
+	if tool.Name() != "ListSkills" {
 		t.Fatalf("unexpected name %q", tool.Name())
 	}
 	if tool.Description() == "" {

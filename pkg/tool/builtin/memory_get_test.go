@@ -12,7 +12,7 @@ import (
 
 func TestMemoryGetMetadata(t *testing.T) {
 	tool := NewMemoryGetTool("/tmp")
-	if tool.Name() != "memory_get" {
+	if tool.Name() != "MemoryGet" {
 		t.Fatalf("unexpected name %q", tool.Name())
 	}
 	if tool.Description() == "" || tool.Schema() == nil {

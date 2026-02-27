@@ -78,13 +78,14 @@ func (c CompactConfig) withDefaults() CompactConfig {
 }
 
 type compactor struct {
-	cfg     CompactConfig
-	model   model.Model
-	limit   int
-	hooks   *corehooks.Executor
-	rollout *RolloutWriter
-	logger  logger.Logger
-	mu      sync.Mutex
+	cfg         CompactConfig
+	model       model.Model
+	limit       int
+	hooks       *corehooks.Executor
+	rollout     *RolloutWriter
+	logger      logger.Logger
+	onCompacted func(sessionID string)
+	mu          sync.Mutex
 }
 
 func newCompactor(projectRoot string, cfg CompactConfig, mdl model.Model, tokenLimit int, hooks *corehooks.Executor, log logger.Logger) *compactor {
@@ -221,6 +222,9 @@ func (c *compactor) postCompact(sessionID string, res compactResult, recorder *h
 				c.logger.Warnf("api: write compaction rollout: %v", err)
 			}
 		}
+	}
+	if c.onCompacted != nil {
+		c.onCompacted(sessionID)
 	}
 }
 

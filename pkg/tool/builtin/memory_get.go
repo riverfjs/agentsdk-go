@@ -13,7 +13,7 @@ import (
 const memoryGetDescription = `Read specific lines from a memory file (MEMORY.md or memory/*.md).
 
 Usage:
-- Use after memory_search to pull only the needed lines and keep context small.
+- Use after MemorySearch to pull only the needed lines and keep context small.
 - path: workspace-relative path, e.g. "MEMORY.md" or "memory/2026-02-24.md"
 - from: starting line number (1-based, optional, defaults to 1)
 - lines: number of lines to read (optional, defaults to all remaining lines)
@@ -48,7 +48,7 @@ func NewMemoryGetTool(workspaceDir string) *MemoryGetTool {
 	return &MemoryGetTool{workspaceDir: workspaceDir}
 }
 
-func (t *MemoryGetTool) Name() string             { return "memory_get" }
+func (t *MemoryGetTool) Name() string             { return "MemoryGet" }
 func (t *MemoryGetTool) Description() string      { return memoryGetDescription }
 func (t *MemoryGetTool) Schema() *tool.JSONSchema { return memoryGetSchema }
 

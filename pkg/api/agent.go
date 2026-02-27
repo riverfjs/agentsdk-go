@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/riverfjs/agentsdk-go/pkg/agent"
 	"github.com/riverfjs/agentsdk-go/pkg/config"
 	coreevents "github.com/riverfjs/agentsdk-go/pkg/core/events"
@@ -30,7 +31,6 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/security"
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 	toolbuiltin "github.com/riverfjs/agentsdk-go/pkg/tool/builtin"
-	"github.com/google/uuid"
 )
 
 type streamContextKey string
@@ -85,9 +85,9 @@ type Runtime struct {
 	tracer    Tracer
 	logger    logger.Logger
 
-	// per-session token tracking for memory flush
-	sessionLastInputTokens sync.Map // sessionID → int64
-	sessionMemoryFlushed   sync.Map // sessionID → bool
+	// per-session memory flush / compaction tracking
+	sessionCompactionCount      sync.Map // sessionID -> int64
+	sessionMemoryFlushAtCompact sync.Map // sessionID -> int64
 
 	mu sync.RWMutex
 
@@ -233,6 +233,15 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		logger:           log,
 	}
 	rt.sessionGate = newSessionGate()
+	if rt.compactor != nil {
+		rt.compactor.onCompacted = func(sessionID string) {
+			if strings.TrimSpace(sessionID) == "" {
+				return
+			}
+			next := rt.sessionCompactionValue(sessionID) + 1
+			rt.sessionCompactionCount.Store(sessionID, next)
+		}
+	}
 
 	if taskTool != nil {
 		taskTool.SetRunner(rt.taskRunner())
@@ -285,8 +294,8 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	defer rt.persistHistory(prep.normalized.SessionID, prep.history)
 
-	// Run memory flush turn if approaching context window limit (uses previous turn's token count).
-	if rt.shouldMemoryFlush(prep.normalized.SessionID) {
+	// Run memory flush turn if approaching context window limit.
+	if rt.shouldMemoryFlush(prep.normalized.SessionID, prep.history, prep.preCompactTokens) {
 		rt.runMemoryFlushTurn(ctx, prep)
 	}
 
@@ -294,11 +303,6 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (*Response, error) {
 	if err != nil {
 		rt.logger.Errorf("[agentsdk] Agent failed: %v", err)
 		return nil, err
-	}
-
-	// Save real input token count for the next turn's memory flush check.
-	if result.usage.InputTokens > 0 {
-		rt.sessionLastInputTokens.Store(prep.normalized.SessionID, int64(result.usage.InputTokens))
 	}
 
 	outputLen := 0
@@ -497,12 +501,12 @@ func (rt *Runtime) ClearSession(sessionID string) error {
 	if rt == nil {
 		return fmt.Errorf("runtime is nil")
 	}
-	
+
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return fmt.Errorf("session ID cannot be empty")
 	}
-	
+
 	// Clear in-memory history
 	if rt.histories != nil {
 		rt.histories.mu.Lock()
@@ -510,7 +514,7 @@ func (rt *Runtime) ClearSession(sessionID string) error {
 		delete(rt.histories.lastUsed, sessionID)
 		rt.histories.mu.Unlock()
 	}
-	
+
 	// Clear persisted history file
 	if rt.historyPersister != nil {
 		path := rt.historyPersister.filePath(sessionID)
@@ -520,14 +524,14 @@ func (rt *Runtime) ClearSession(sessionID string) error {
 			}
 		}
 	}
-	
+
 	// Clean up tool output directories
 	_ = cleanupToolOutputSessionDir(sessionID)
 	_ = cleanupBashOutputSessionDir(sessionID)
 
-	// Reset memory flush state so a new session cycle can trigger flush again.
-	rt.sessionLastInputTokens.Delete(sessionID)
-	rt.sessionMemoryFlushed.Delete(sessionID)
+	// Reset memory flush / compaction cycle state.
+	rt.sessionCompactionCount.Delete(sessionID)
+	rt.sessionMemoryFlushAtCompact.Delete(sessionID)
 
 	return nil
 }
@@ -570,17 +574,18 @@ func (rt *Runtime) GetHistory(sessionID string) ([]message.Message, error) {
 // ----------------- internal helpers -----------------
 
 type preparedRun struct {
-	ctx             context.Context
-	prompt          string
-	history         *message.History
-	normalized      Request
-	recorder        *hookRecorder
-	commandResults  []CommandExecution
-	skillResults    []SkillExecution
-	subagentResult  *subagents.Result
-	mode            ModeContext
-	toolWhitelist   map[string]struct{}
-	attachments     []model.MessageAttachment // Images for vision API
+	ctx              context.Context
+	prompt           string
+	history          *message.History
+	preCompactTokens int
+	normalized       Request
+	recorder         *hookRecorder
+	commandResults   []CommandExecution
+	skillResults     []SkillExecution
+	subagentResult   *subagents.Result
+	mode             ModeContext
+	toolWhitelist    map[string]struct{}
+	attachments      []model.MessageAttachment // Images for vision API
 }
 
 type runResult struct {
@@ -618,7 +623,7 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 	prompt = "[Current time: " + time.Now().Format("2006-01-02 15:04 MST") + "]\n" + prompt
 
 	// Inject available skills by scanning the filesystem on every request so the
-	// agent always knows what skills exist without calling list_skills, and new
+	// agent always knows what skills exist without calling ListSkills, and new
 	// skills installed after startup are immediately visible (no restart needed).
 	if rt.opts.ProjectRoot != "" {
 		if skillsSnippet := buildSkillsSnippet(rt.opts.ProjectRoot); skillsSnippet != "" {
@@ -644,13 +649,14 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 			SourceType: "base64",
 		})
 	}
-	
+
 	if len(msgAttachments) > 0 {
 		rt.logger.Debugf("loaded %d image attachment(s) for vision API", len(msgAttachments))
 	}
 
 	history := rt.histories.Get(normalized.SessionID)
 	recorder := defaultHookRecorder()
+	preCompactTokens := estimateHistoryTokens(history)
 
 	if rt.compactor != nil {
 		if _, _, err := rt.compactor.maybeCompact(ctx, history, normalized.SessionID, recorder); err != nil {
@@ -675,15 +681,25 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 		usageRatio := float64(estimated) / float64(rt.opts.ContextWindowTokens)
 
 		if remaining < hardMin {
-			return preparedRun{}, fmt.Errorf(
-				"⚠️ 上下文窗口已满（估算已用约 %d tokens，仅剩 %d tokens，上限 %d tokens）。\n"+
-					"请使用 /reset 开始新会话。在重置前，可用 memory_write 工具将重要内容写入 MEMORY.md。",
-				estimated, remaining, rt.opts.ContextWindowTokens,
-			)
+			rt.logger.Warnf("[agentsdk] context pressure: estimated %d / %d tokens used, remaining %d (<%d)",
+				estimated, rt.opts.ContextWindowTokens, remaining, hardMin)
+			if rt.opts.RealtimeEventCallback != nil {
+				rt.opts.RealtimeEventCallback(RealtimeEvent{
+					Type:      RealtimeEventContextWindowWarn,
+					Message:   fmt.Sprintf("context pressure: %d/%d tokens used; automatic memory flush may run", estimated, rt.opts.ContextWindowTokens),
+					Timestamp: time.Now(),
+					SessionID: normalized.SessionID,
+					Metadata: map[string]any{
+						"estimated_tokens": estimated,
+						"remaining_tokens": remaining,
+						"hard_min_tokens":  hardMin,
+					},
+				})
+			}
 		}
 		if usageRatio >= warnRatio {
 			warnMsg := fmt.Sprintf(
-				"⚠️ 上下文窗口已使用约 %.0f%%（%d / %d tokens），建议整理重要内容到 MEMORY.md，或使用 /reset 重置会话。",
+				"context usage is ~%.0f%% (%d / %d tokens); automatic memory flush may run",
 				usageRatio*100, estimated, rt.opts.ContextWindowTokens,
 			)
 			rt.logger.Warnf("[agentsdk] context window: estimated %d / %d tokens used (%.0f%%)",
@@ -693,6 +709,12 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 					Type:      RealtimeEventContextWindowWarn,
 					Message:   warnMsg,
 					Timestamp: time.Now(),
+					SessionID: normalized.SessionID,
+					Metadata: map[string]any{
+						"estimated_tokens": estimated,
+						"remaining_tokens": remaining,
+						"warn_ratio":       warnRatio,
+					},
 				})
 			}
 		}
@@ -722,7 +744,7 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 
 	// Auto-recall: search MEMORY.md before the agent turn and prepend relevant
 	// memories to the prompt. This mirrors openclaw's before_agent_start hook
-	// and ensures the agent doesn't need to decide to call memory_search itself.
+	// and ensures the agent doesn't need to decide to call MemorySearch itself.
 	if rt.opts.AutoRecall && strings.TrimSpace(rt.opts.ProjectRoot) != "" {
 		maxR := rt.opts.AutoRecallMaxResults
 		if maxR <= 0 {
@@ -746,17 +768,18 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 
 	whitelist := combineToolWhitelists(normalized.ToolWhitelist, nil)
 	return preparedRun{
-		ctx:            ctx,
-		prompt:         prompt,
-		history:        history,
-		normalized:     normalized,
-		recorder:       recorder,
-		commandResults: cmdRes,
-		skillResults:   skillRes,
-		subagentResult: subRes,
-		mode:           normalized.Mode,
-		toolWhitelist:  whitelist,
-		attachments:    msgAttachments,
+		ctx:              ctx,
+		prompt:           prompt,
+		history:          history,
+		preCompactTokens: preCompactTokens,
+		normalized:       normalized,
+		recorder:         recorder,
+		commandResults:   cmdRes,
+		skillResults:     skillRes,
+		subagentResult:   subRes,
+		mode:             normalized.Mode,
+		toolWhitelist:    whitelist,
+		attachments:      msgAttachments,
 	}, nil
 }
 
@@ -829,7 +852,7 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 
 	// Build middleware chain
 	chainItems := make([]middleware.Middleware, 0, len(rt.opts.Middleware)+len(extras))
-	
+
 	if len(rt.opts.Middleware) > 0 {
 		chainItems = append(chainItems, rt.opts.Middleware...)
 	}
@@ -837,7 +860,7 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		chainItems = append(chainItems, extras...)
 	}
 	chain := middleware.NewChain(chainItems, middleware.WithTimeout(rt.opts.MiddlewareTimeout))
-	
+
 	ag, err := agent.New(modelAdapter, toolExec, agent.Options{
 		MaxIterations: rt.opts.MaxIterations,
 		Timeout:       rt.opts.Timeout,
@@ -862,13 +885,13 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 	if rt.skReg != nil {
 		agentCtx.Values["skills.registry"] = rt.skReg
 	}
-	
+
 	out, err := ag.Run(prep.ctx, agentCtx)
 	if err != nil {
 		rt.logger.Errorf("[agentsdk] agent.Run failed: %v", err)
 		return runResult{}, err
 	}
-	
+
 	if rt.tokens != nil && rt.tokens.IsEnabled() {
 		stats := tokenStatsFromUsage(modelAdapter.usage, "", prep.normalized.SessionID, prep.normalized.RequestID)
 		rt.tokens.Record(stats)
@@ -908,11 +931,11 @@ func (rt *Runtime) buildResponse(prep preparedRun, result runResult) *Response {
 	if prep.recorder != nil {
 		events = prep.recorder.Drain()
 	}
-	
+
 	// Scan events and emit FileAttachment events
 	newEvents := rt.extractSpecialEvents(events)
 	events = append(events, newEvents...)
-	
+
 	resp := &Response{
 		Mode:            prep.mode,
 		RequestID:       prep.normalized.RequestID,
@@ -928,7 +951,6 @@ func (rt *Runtime) buildResponse(prep preparedRun, result runResult) *Response {
 	}
 	return resp
 }
-
 
 func (rt *Runtime) sandboxReport() SandboxReport {
 	report := snapshotSandbox(rt.sandbox)
@@ -1235,22 +1257,20 @@ func estimateHistoryTokens(history *message.History) int {
 	return total / 4
 }
 
-// shouldMemoryFlush returns true if the previous turn's input tokens crossed the
-// memory-flush threshold and no flush has been performed yet this session cycle.
-func (rt *Runtime) shouldMemoryFlush(sessionID string) bool {
+// shouldMemoryFlush returns true if current estimated session tokens crossed the
+// memory-flush threshold and no flush has been performed in this compaction cycle.
+func (rt *Runtime) shouldMemoryFlush(sessionID string, history *message.History, estimatedTokens int) bool {
 	cfg := rt.opts.MemoryFlush
 	if !cfg.Enabled || rt.opts.ContextWindowTokens <= 0 {
 		return false
 	}
-	if v, ok := rt.sessionMemoryFlushed.Load(sessionID); ok && v.(bool) {
-		return false
+	if estimatedTokens <= 0 {
+		if history == nil {
+			return false
+		}
+		estimatedTokens = estimateHistoryTokens(history)
 	}
-	v, ok := rt.sessionLastInputTokens.Load(sessionID)
-	if !ok {
-		return false
-	}
-	lastTokens := v.(int64)
-	if lastTokens <= 0 {
+	if estimatedTokens <= 0 {
 		return false
 	}
 	soft := cfg.SoftThresholdTokens
@@ -1261,11 +1281,18 @@ func (rt *Runtime) shouldMemoryFlush(sessionID string) bool {
 	if reserve <= 0 {
 		reserve = 20000
 	}
-	threshold := int64(rt.opts.ContextWindowTokens - reserve - soft)
+	threshold := rt.opts.ContextWindowTokens - reserve - soft
 	if threshold <= 0 {
 		return false
 	}
-	return lastTokens >= threshold
+	if estimatedTokens < threshold {
+		return false
+	}
+	currentCompaction := rt.sessionCompactionValue(sessionID)
+	if lastFlushAt, ok := rt.sessionMemoryFlushAtCompaction(sessionID); ok && lastFlushAt == currentCompaction {
+		return false
+	}
+	return true
 }
 
 // runMemoryFlushTurn runs a hidden agent turn that asks the agent to persist
@@ -1273,9 +1300,25 @@ func (rt *Runtime) shouldMemoryFlush(sessionID string) bool {
 // session history; only tool side-effects (file writes) persist.
 func (rt *Runtime) runMemoryFlushTurn(ctx context.Context, prep preparedRun) {
 	cfg := rt.opts.MemoryFlush
+	soft := cfg.SoftThresholdTokens
+	if soft <= 0 {
+		soft = 4000
+	}
+	reserve := cfg.ReserveTokensFloor
+	if reserve <= 0 {
+		reserve = 20000
+	}
+	threshold := rt.opts.ContextWindowTokens - reserve - soft
+	estimated := prep.preCompactTokens
+	if estimated <= 0 {
+		estimated = estimateHistoryTokens(prep.history)
+	}
+
 	prompt := strings.TrimSpace(cfg.Prompt)
 	if prompt == "" {
-		prompt = "Pre-compaction memory flush. Store durable memories now (use memory/YYYY-MM-DD.md; create memory/ if needed). If nothing important to store, just say so briefly."
+		prompt = "Pre-compaction memory flush. Store durable memories now. " +
+			"Write a short index in MEMORY.md, and put detailed notes in memory/projects.md, memory/lessons.md, or memory/YYYY-MM-DD.md. " +
+			"If nothing important to store, just say so briefly."
 	}
 
 	// Clone the current history so the flush turn's messages don't pollute the real session.
@@ -1283,20 +1326,86 @@ func (rt *Runtime) runMemoryFlushTurn(ctx context.Context, prep preparedRun) {
 	flushHistory.Replace(prep.history.All())
 
 	flushPrep := preparedRun{
-		ctx:       ctx,
-		history:   flushHistory,
-		prompt:    prompt,
-		normalized: prep.normalized,
-		recorder:  defaultHookRecorder(), // discard flush events from the response
-		mode:      prep.mode,
+		ctx:           ctx,
+		history:       flushHistory,
+		prompt:        prompt,
+		normalized:    prep.normalized,
+		recorder:      defaultHookRecorder(), // discard flush events from the response
+		mode:          prep.mode,
 		toolWhitelist: prep.toolWhitelist,
 	}
 
-	rt.logger.Infof("[agentsdk] Running memory flush for session %s (inputTokens near limit)", prep.normalized.SessionID)
+	rt.logger.Infof("[agentsdk] Running memory flush for session %s (context pressure)", prep.normalized.SessionID)
+	if rt.opts.RealtimeEventCallback != nil {
+		rt.opts.RealtimeEventCallback(RealtimeEvent{
+			Type:      RealtimeEventMemoryFlushStart,
+			Message:   "automatic memory flush started",
+			Timestamp: time.Now(),
+			SessionID: prep.normalized.SessionID,
+			Metadata: map[string]any{
+				"estimated_tokens": estimated,
+				"threshold_tokens": threshold,
+			},
+		})
+	}
 	if _, err := rt.runAgentWithMiddleware(flushPrep); err != nil {
 		rt.logger.Warnf("[agentsdk] Memory flush turn failed: %v", err)
+		if rt.opts.RealtimeEventCallback != nil {
+			rt.opts.RealtimeEventCallback(RealtimeEvent{
+				Type:      RealtimeEventMemoryFlushFailed,
+				Message:   "automatic memory flush failed",
+				Timestamp: time.Now(),
+				SessionID: prep.normalized.SessionID,
+				Metadata: map[string]any{
+					"error":            err.Error(),
+					"estimated_tokens": estimated,
+					"threshold_tokens": threshold,
+				},
+			})
+		}
+		return
 	}
-	rt.sessionMemoryFlushed.Store(prep.normalized.SessionID, true)
+	rt.sessionMemoryFlushAtCompact.Store(prep.normalized.SessionID, rt.sessionCompactionValue(prep.normalized.SessionID))
+	if rt.opts.RealtimeEventCallback != nil {
+		rt.opts.RealtimeEventCallback(RealtimeEvent{
+			Type:      RealtimeEventMemoryFlushDone,
+			Message:   "automatic memory flush completed",
+			Timestamp: time.Now(),
+			SessionID: prep.normalized.SessionID,
+			Metadata: map[string]any{
+				"estimated_tokens": estimated,
+				"threshold_tokens": threshold,
+				"compaction_cycle": rt.sessionCompactionValue(prep.normalized.SessionID),
+			},
+		})
+	}
+}
+
+func (rt *Runtime) sessionCompactionValue(sessionID string) int64 {
+	if rt == nil {
+		return 0
+	}
+	if v, ok := rt.sessionCompactionCount.Load(sessionID); ok {
+		if n, ok := v.(int64); ok && n >= 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+func (rt *Runtime) sessionMemoryFlushAtCompaction(sessionID string) (int64, bool) {
+	if rt == nil {
+		return 0, false
+	}
+	v, ok := rt.sessionMemoryFlushAtCompact.Load(sessionID)
+	if !ok {
+		return 0, false
+	}
+	n, ok := v.(int64)
+	if !ok {
+		return 0, false
+	}
+	return n, true
 }
 
 // ----------------- adapters -----------------
@@ -1349,7 +1458,7 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 	if m.trimmer != nil {
 		snapshot = m.trimmer.Trim(snapshot)
 	}
-	
+
 	systemPrompt := m.systemPrompt
 	if m.rulesLoader != nil {
 		if rules := m.rulesLoader.GetContent(); rules != "" {
@@ -1973,10 +2082,10 @@ func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, s
 	factories["send_file"] = func() tool.Tool { return toolbuiltin.NewSendFileTool() }
 	factories["skill"] = func() tool.Tool { return toolbuiltin.NewSkillTool(skReg, nil) }
 	factories["slash_command"] = func() tool.Tool { return toolbuiltin.NewSlashCommandTool(cmdExec) }
-	factories["memory_search"] = func() tool.Tool { return toolbuiltin.NewMemorySearchTool(root) }
-	factories["memory_get"] = func() tool.Tool { return toolbuiltin.NewMemoryGetTool(root) }
-	factories["memory_write"] = func() tool.Tool { return toolbuiltin.NewMemoryWriteTool(root) }
-	factories["list_skills"] = func() tool.Tool { return toolbuiltin.NewListSkillsTool(root) }
+	factories["memorysearch"] = func() tool.Tool { return toolbuiltin.NewMemorySearchTool(root) }
+	factories["memoryget"] = func() tool.Tool { return toolbuiltin.NewMemoryGetTool(root) }
+	factories["memorywrite"] = func() tool.Tool { return toolbuiltin.NewMemoryWriteTool(root) }
+	factories["listskills"] = func() tool.Tool { return toolbuiltin.NewListSkillsTool(root) }
 
 	if shouldRegisterTaskTool(entry) {
 		factories["task"] = func() tool.Tool { return toolbuiltin.NewTaskTool() }
@@ -2006,10 +2115,10 @@ func builtinOrder(entry EntryPoint) []string {
 		"slash_command",
 		"grep",
 		"glob",
-		"memory_search",
-		"memory_get",
-		"memory_write",
-		"list_skills",
+		"memorysearch",
+		"memoryget",
+		"memorywrite",
+		"listskills",
 	}
 	if shouldRegisterTaskTool(entry) {
 		order = append(order, "task")
@@ -2024,18 +2133,21 @@ func filterBuiltinNames(enabled []string, order []string) []string {
 	if len(enabled) == 0 {
 		return nil
 	}
+	canon := func(name string) string {
+		name = strings.ToLower(strings.TrimSpace(name))
+		name = strings.NewReplacer("-", "", "_", "", " ", "").Replace(name)
+		return name
+	}
 	set := make(map[string]struct{}, len(enabled))
-	repl := strings.NewReplacer("-", "_", " ", "_")
 	for _, name := range enabled {
-		key := strings.ToLower(strings.TrimSpace(name))
-		key = repl.Replace(key)
+		key := canon(name)
 		if key != "" {
 			set[key] = struct{}{}
 		}
 	}
 	var filtered []string
 	for _, name := range order {
-		if _, ok := set[name]; ok {
+		if _, ok := set[canon(name)]; ok {
 			filtered = append(filtered, name)
 		}
 	}
@@ -2145,7 +2257,7 @@ func loadImageAsBase64(filePath, mimeType string) (string, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("read file: %w", err)
 	}
-	
+
 	// Auto-detect MIME type if not provided
 	if mimeType == "" {
 		ext := strings.ToLower(filepath.Ext(filePath))
@@ -2162,7 +2274,7 @@ func loadImageAsBase64(filePath, mimeType string) (string, string, error) {
 			mimeType = "image/jpeg"
 		}
 	}
-	
+
 	encoded := base64.StdEncoding.EncodeToString(data)
 	return encoded, mimeType, nil
 }

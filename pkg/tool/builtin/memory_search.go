@@ -25,7 +25,7 @@ const (
 Usage:
 - Call this tool BEFORE answering anything about past events, decisions, preferences, or tasks.
 - Returns top matching snippets with file path and line range.
-- Follow up with memory_get to read the full content of a specific location.
+- Follow up with MemoryGet to read the full content of a specific location.
 - query: the search query in natural language or keywords`
 )
 
@@ -63,7 +63,7 @@ func NewMemorySearchTool(workspaceDir string) *MemorySearchTool {
 	return &MemorySearchTool{workspaceDir: workspaceDir}
 }
 
-func (t *MemorySearchTool) Name() string        { return "memory_search" }
+func (t *MemorySearchTool) Name() string        { return "MemorySearch" }
 func (t *MemorySearchTool) Description() string { return memorySearchDescription }
 func (t *MemorySearchTool) Schema() *tool.JSONSchema { return memorySearchSchema }
 

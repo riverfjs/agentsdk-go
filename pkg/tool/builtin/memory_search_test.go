@@ -25,7 +25,7 @@ func writeMemoryFile(t *testing.T, dir, rel, content string) {
 
 func TestMemorySearchMetadata(t *testing.T) {
 	tool := NewMemorySearchTool("/tmp")
-	if tool.Name() != "memory_search" {
+	if tool.Name() != "MemorySearch" {
 		t.Fatalf("unexpected name %q", tool.Name())
 	}
 	if tool.Description() == "" {
