@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"strings"
 	"unicode"
 )
@@ -8,6 +9,9 @@ import (
 const (
 	defaultPolicyRefusalMessage = "Sorry, I can't process that request."
 )
+
+// ErrPromptPolicyViolation is the sentinel error for prompt-policy blocks.
+var ErrPromptPolicyViolation = errors.New("api: prompt policy violation")
 
 type promptPolicyViolationError struct {
 	message string
@@ -18,6 +22,10 @@ func (e *promptPolicyViolationError) Error() string {
 		return defaultPolicyRefusalMessage
 	}
 	return e.message
+}
+
+func (e *promptPolicyViolationError) Unwrap() error {
+	return ErrPromptPolicyViolation
 }
 
 func detectPromptDisclosureRequest(prompt string) bool {
@@ -151,6 +159,19 @@ func (rt *Runtime) outputGuardEnabled() bool {
 
 func policyRefusalMessage() string {
 	return defaultPolicyRefusalMessage
+}
+
+// PromptPolicyRefusalMessage returns the canonical guard refusal text.
+func PromptPolicyRefusalMessage() string {
+	return defaultPolicyRefusalMessage
+}
+
+// IsPromptPolicyViolation reports whether err represents a prompt-policy block.
+func IsPromptPolicyViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, ErrPromptPolicyViolation)
 }
 
 func containsAny(text string, terms []string) bool {

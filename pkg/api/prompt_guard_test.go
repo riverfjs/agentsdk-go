@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/riverfjs/agentsdk-go/pkg/model"
@@ -51,5 +52,26 @@ func TestRuntimePromptGuardAllowsSafeRequests(t *testing.T) {
 	}
 	if resp == nil || resp.Result == nil || resp.Result.Output != "ok" {
 		t.Fatalf("unexpected response: %+v", resp)
+	}
+}
+
+func TestIsPromptPolicyViolation(t *testing.T) {
+	pvErr := &promptPolicyViolationError{message: defaultPolicyRefusalMessage}
+	if !IsPromptPolicyViolation(pvErr) {
+		t.Fatal("expected prompt policy violation for typed error")
+	}
+	wrapped := fmt.Errorf("wrapped: %w", pvErr)
+	if !IsPromptPolicyViolation(wrapped) {
+		t.Fatal("expected prompt policy violation for wrapped typed error")
+	}
+	if !errors.Is(pvErr, ErrPromptPolicyViolation) {
+		t.Fatal("expected typed error to unwrap to sentinel")
+	}
+	sentinelWrapped := fmt.Errorf("wrapped sentinel: %w", ErrPromptPolicyViolation)
+	if !IsPromptPolicyViolation(sentinelWrapped) {
+		t.Fatal("expected prompt policy violation for wrapped sentinel")
+	}
+	if IsPromptPolicyViolation(errors.New("another error")) {
+		t.Fatal("did not expect prompt policy violation for unrelated error")
 	}
 }
