@@ -12,6 +12,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Read output of background shell tasks."
+	registerShortToolDesc("bash_output", shortToolDesc)
+}
+
 const bashOutputDescription = `
 - Retrieves output from a running or completed background bash shell
 - Takes a bash_id for legacy shells or task_id for async Bash tasks

@@ -11,6 +11,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "List tasks with optional filters."
+	registerShortToolDesc("task_list", shortToolDesc)
+}
+
 const taskListDescription = "List tasks with optional status/owner filtering and dependency visualization."
 
 var taskListSchema = &tool.JSONSchema{

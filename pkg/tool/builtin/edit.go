@@ -11,6 +11,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Apply precise in-file text replacements."
+	registerShortToolDesc("edit", shortToolDesc)
+}
+
 const editDescription = `Performs exact string replacements in files.
 
 Usage:

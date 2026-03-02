@@ -27,6 +27,8 @@ const (
 	EventToolExecutionStart  = "tool_execution_start"
 	EventToolExecutionOutput = "tool_execution_output"
 	EventToolExecutionResult = "tool_execution_result"
+	// EventFinalResponse carries the complete api.Response at stream end.
+	EventFinalResponse = "final_response"
 	EventError               = "error"
 )
 

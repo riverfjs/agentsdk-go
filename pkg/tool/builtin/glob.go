@@ -13,6 +13,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Find files by glob patterns recursively."
+	registerShortToolDesc("glob", shortToolDesc)
+}
+
 const (
 	globResultLimit = 100
 	globToolDesc    = `

@@ -456,6 +456,9 @@ func TestConvertOpenAIUsage(t *testing.T) {
 		PromptTokens:     100,
 		CompletionTokens: 50,
 		TotalTokens:      150,
+		PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
+			CachedTokens: 40,
+		},
 	}
 
 	result := convertOpenAIUsage(usage)
@@ -463,6 +466,8 @@ func TestConvertOpenAIUsage(t *testing.T) {
 	assert.Equal(t, 100, result.InputTokens)
 	assert.Equal(t, 50, result.OutputTokens)
 	assert.Equal(t, 150, result.TotalTokens)
+	assert.Equal(t, 40, result.CacheReadTokens)
+	assert.Equal(t, 0, result.CacheCreationTokens)
 }
 
 func TestParseJSONArgs(t *testing.T) {

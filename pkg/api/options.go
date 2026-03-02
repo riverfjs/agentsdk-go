@@ -238,6 +238,16 @@ type Options struct {
 	DefaultEnableCache bool
 
 	SystemPrompt string
+	// PromptGuardEnabled blocks user attempts to request/rewrite/reveal
+	// system or hidden instructions. nil defaults to true.
+	PromptGuardEnabled *bool
+	// PromptGuardModelFactory provides a dedicated classifier model for
+	// multilingual prompt-exfiltration detection. When nil, input guard falls
+	// back to fail-open (output guard still applies).
+	PromptGuardModelFactory ModelFactory
+	// OutputGuardEnabled redacts assistant outputs that appear to disclose
+	// system prompt content. nil defaults to true.
+	OutputGuardEnabled *bool
 	RulesEnabled *bool // nil = 默认启用，false = 禁用
 
 	Middleware        []middleware.Middleware
@@ -532,7 +542,6 @@ func (o Options) withDefaults() Options {
 	if o.MaxSessions <= 0 {
 		o.MaxSessions = defaultMaxSessions
 	}
-
 	return o
 }
 

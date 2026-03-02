@@ -9,6 +9,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Collect structured choices from the user."
+	registerShortToolDesc("ask_user_question", shortToolDesc)
+}
+
 const askUserQuestionDescription = `Use this tool when you need to ask the user questions during execution. This allows you to:
 1. Gather user preferences or requirements
 2. Clarify ambiguous instructions

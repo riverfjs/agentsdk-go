@@ -180,6 +180,11 @@ const (
 	`
 )
 
+func init() {
+	const shortToolDesc = "Execute shell commands in a persistent session."
+	registerShortToolDesc("bash", shortToolDesc)
+}
+
 var bashSchema = &tool.JSONSchema{
 	Type: "object",
 	Properties: map[string]interface{}{

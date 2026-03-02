@@ -9,6 +9,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Write or overwrite files in workspace."
+	registerShortToolDesc("write", shortToolDesc)
+}
+
 const writeDescription = `Writes a file to the local filesystem.
 
 Usage:

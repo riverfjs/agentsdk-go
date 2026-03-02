@@ -13,6 +13,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Search MEMORY.md and memory/*.md snippets."
+	registerShortToolDesc("memorysearch", shortToolDesc)
+}
+
 const (
 	memorySearchChunkSize    = 400  // target tokens per chunk (~4 chars/token estimate)
 	memorySearchChunkOverlap = 80

@@ -10,6 +10,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Read specific lines from memory files."
+	registerShortToolDesc("memoryget", shortToolDesc)
+}
+
 const memoryGetDescription = `Read specific lines from a memory file (MEMORY.md or memory/*.md).
 
 Usage:

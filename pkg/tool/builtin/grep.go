@@ -12,6 +12,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Search file contents using regex patterns."
+	registerShortToolDesc("grep", shortToolDesc)
+}
+
 const (
 	grepResultLimit = 100
 	grepMaxDepth    = 8

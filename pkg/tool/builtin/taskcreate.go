@@ -11,6 +11,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Create a task in the task store."
+	registerShortToolDesc("task_create", shortToolDesc)
+}
+
 const taskCreateDescription = `Create a new task in the task store.
 
 Use this when you want to persist a task with a required subject and activeForm (plus an optional description).`

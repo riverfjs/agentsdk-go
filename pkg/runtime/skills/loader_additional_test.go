@@ -223,6 +223,23 @@ func TestNilHandlerBodyLength(t *testing.T) {
 	}
 }
 
+func TestLoadFromFSDisablesAutoActivationByDefault(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".claude", "skills", "demo")
+	writeSkill(t, filepath.Join(dir, "SKILL.md"), "demo", "body")
+
+	regs, errs := LoadFromFS(LoaderOptions{ProjectRoot: root})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errs: %v", errs)
+	}
+	if len(regs) != 1 {
+		t.Fatalf("expected one registration, got %d", len(regs))
+	}
+	if !regs[0].Definition.DisableAutoActivation {
+		t.Fatal("expected fs-loaded skill auto-activation to be disabled")
+	}
+}
+
 func TestHandlerReloadAfterError(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, ".claude", "skills", "reloaderr")

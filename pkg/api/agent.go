@@ -61,6 +61,9 @@ func streamEmitFromContext(ctx context.Context) streamEmitFunc {
 type Runtime struct {
 	opts        Options
 	mode        ModeContext
+	// guardBaseSystemPrompt keeps the original caller-provided system prompt
+	// (for aevitas: AGENTS.md + SOUL.md) before runtime context injections.
+	guardBaseSystemPrompt string
 	settings    *config.Settings
 	cfg         *config.Settings
 	fs          *config.FS
@@ -77,13 +80,13 @@ type Runtime struct {
 	historyPersister *diskHistoryPersister
 	sessionGate      *sessionGate
 
-	cmdExec   *commands.Executor
-	skReg     *skills.Registry
-	subMgr    *subagents.Manager
-	tokens    *tokenTracker
-	compactor *compactor
-	tracer    Tracer
-	logger    logger.Logger
+	cmdExec          *commands.Executor
+	skReg            *skills.Registry
+	subMgr           *subagents.Manager
+	tokens           *tokenTracker
+	compactor        *compactor
+	tracer           Tracer
+	logger           logger.Logger
 
 	// per-session memory flush / compaction tracking
 	sessionCompactionCount      sync.Map // sessionID -> int64
@@ -103,6 +106,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	opts = opts.withDefaults()
 	opts = opts.frozen()
 	mode := opts.modeContext()
+	guardBaseSystemPrompt := strings.TrimSpace(opts.SystemPrompt)
 
 	// 初始化 logger，如果未提供则使用默认
 	log := opts.Logger
@@ -210,27 +214,28 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 
 	rt := &Runtime{
-		opts:             opts,
-		mode:             mode,
-		settings:         settings,
-		cfg:              projectConfigFromSettings(settings),
-		fs:               fsLayer,
-		rulesLoader:      rulesLoader,
-		sandbox:          sbox,
-		sbRoot:           sbRoot,
-		registry:         registry,
-		executor:         executor,
-		recorder:         recorder,
-		hooks:            hooks,
-		histories:        histories,
-		historyPersister: historyPersister,
-		cmdExec:          cmdExec,
-		skReg:            skReg,
-		subMgr:           subMgr,
-		tokens:           newTokenTracker(opts.TokenTracking, opts.TokenCallback),
-		compactor:        compactor,
-		tracer:           tracer,
-		logger:           log,
+		opts:                  opts,
+		mode:                  mode,
+		guardBaseSystemPrompt: guardBaseSystemPrompt,
+		settings:              settings,
+		cfg:                   projectConfigFromSettings(settings),
+		fs:                    fsLayer,
+		rulesLoader:           rulesLoader,
+		sandbox:               sbox,
+		sbRoot:                sbRoot,
+		registry:              registry,
+		executor:              executor,
+		recorder:              recorder,
+		hooks:                 hooks,
+		histories:             histories,
+		historyPersister:      historyPersister,
+		cmdExec:               cmdExec,
+		skReg:                 skReg,
+		subMgr:                subMgr,
+		tokens:                newTokenTracker(opts.TokenTracking, opts.TokenCallback, tokenTrackerStorePath(opts.ProjectRoot)),
+		compactor:             compactor,
+		tracer:                tracer,
+		logger:                log,
 	}
 	rt.sessionGate = newSessionGate()
 	if rt.compactor != nil {
@@ -280,6 +285,10 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (*Response, error) {
 	req.SessionID = sessionID
 
 	rt.logger.Infof("[agentsdk] Run: session=%s, prompt=%s", sessionID, truncatePrompt(req.Prompt, 80))
+	if rt.promptGuardEnabled() && detectPromptDisclosureRequest(req.Prompt) {
+		rt.logger.Warnf("[agentsdk] input_guard_blocked: session=%s request=%s prompt=%q", sessionID, strings.TrimSpace(req.RequestID), req.Prompt)
+		return nil, &promptPolicyViolationError{message: policyRefusalMessage()}
+	}
 
 	if err := rt.sessionGate.Acquire(ctx, sessionID); err != nil {
 		rt.logger.Errorf("[agentsdk] Failed to acquire session gate: %v", err)
@@ -312,6 +321,15 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (*Response, error) {
 	if outputLen > 0 {
 		rt.logger.Infof("[agentsdk] Completed: %d chars", outputLen)
 	}
+	if result.usage.TotalTokens > 0 || result.usage.InputTokens > 0 || result.usage.OutputTokens > 0 {
+		rt.logger.Infof("[agentsdk] Token usage: in=%d out=%d total=%d cache_create=%d cache_read=%d",
+			result.usage.InputTokens,
+			result.usage.OutputTokens,
+			result.usage.TotalTokens,
+			result.usage.CacheCreationTokens,
+			result.usage.CacheReadTokens,
+		)
+	}
 	return rt.buildResponse(prep, result), nil
 }
 
@@ -320,6 +338,28 @@ func truncatePrompt(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+func tokenTrackerStorePath(projectRoot string) string {
+	root := strings.TrimSpace(projectRoot)
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, ".claude", "token_stats.json")
+}
+
+func mergeUsage(a, b model.Usage) model.Usage {
+	merged := model.Usage{
+		InputTokens:         a.InputTokens + b.InputTokens,
+		OutputTokens:        a.OutputTokens + b.OutputTokens,
+		TotalTokens:         a.TotalTokens + b.TotalTokens,
+		CacheReadTokens:     a.CacheReadTokens + b.CacheReadTokens,
+		CacheCreationTokens: a.CacheCreationTokens + b.CacheCreationTokens,
+	}
+	if merged.TotalTokens == 0 {
+		merged.TotalTokens = merged.InputTokens + merged.OutputTokens
+	}
+	return merged
 }
 
 // RunStream executes the pipeline asynchronously and returns events over a channel.
@@ -335,6 +375,10 @@ func (rt *Runtime) RunStream(ctx context.Context, req Request) (<-chan StreamEve
 		sessionID = defaultSessionID(rt.mode.EntryPoint)
 	}
 	req.SessionID = sessionID
+	if rt.promptGuardEnabled() && detectPromptDisclosureRequest(req.Prompt) {
+		rt.logger.Warnf("[agentsdk] input_guard_blocked: session=%s request=%s prompt=%q", sessionID, strings.TrimSpace(req.RequestID), req.Prompt)
+		return nil, &promptPolicyViolationError{message: policyRefusalMessage()}
+	}
 
 	if err := rt.beginRun(); err != nil {
 		return nil, err
@@ -409,7 +453,17 @@ func (rt *Runtime) RunStream(ctx context.Context, req Request) (<-chan StreamEve
 			out <- StreamEvent{Type: EventError, Output: runErr.Error(), IsError: &isErr}
 			return
 		}
-		rt.buildResponse(prep, result)
+		if result.usage.TotalTokens > 0 || result.usage.InputTokens > 0 || result.usage.OutputTokens > 0 {
+			rt.logger.Infof("[agentsdk] Token usage: in=%d out=%d total=%d cache_create=%d cache_read=%d",
+				result.usage.InputTokens,
+				result.usage.OutputTokens,
+				result.usage.TotalTokens,
+				result.usage.CacheCreationTokens,
+				result.usage.CacheReadTokens,
+			)
+		}
+		resp := rt.buildResponse(prep, result)
+		out <- StreamEvent{Type: EventFinalResponse, Output: resp}
 	}()
 	return out, nil
 }
@@ -494,6 +548,25 @@ func (rt *Runtime) GetTotalStats() *SessionTokenStats {
 	return rt.tokens.GetTotalStats()
 }
 
+// GetContextReport returns an estimated static context breakdown (excluding history).
+func (rt *Runtime) GetContextReport() ContextReport {
+	if rt == nil {
+		return ContextReport{}
+	}
+	systemPrompt := strings.TrimSpace(rt.opts.SystemPrompt)
+	if rt.rulesLoader != nil {
+		if rules := strings.TrimSpace(rt.rulesLoader.GetContent()); rules != "" {
+			systemPrompt = strings.TrimSpace(systemPrompt + "\n\n## Project Rules\n\n" + rules)
+		}
+	}
+	skillsSnippet := ""
+	if strings.TrimSpace(rt.opts.ProjectRoot) != "" {
+		skillsSnippet = buildSkillsSnippet(rt.opts.ProjectRoot)
+	}
+	defs := availableTools(rt.registry, nil)
+	return buildContextReport(systemPrompt, skillsSnippet, defs)
+}
+
 // ClearSession removes all conversation history for the given session.
 // This includes both in-memory history and persisted history on disk.
 // The session will start fresh on the next Run() call.
@@ -532,6 +605,9 @@ func (rt *Runtime) ClearSession(sessionID string) error {
 	// Reset memory flush / compaction cycle state.
 	rt.sessionCompactionCount.Delete(sessionID)
 	rt.sessionMemoryFlushAtCompact.Delete(sessionID)
+	if rt.tokens != nil {
+		rt.tokens.ResetSession(sessionID)
+	}
 
 	return nil
 }
@@ -576,6 +652,8 @@ func (rt *Runtime) GetHistory(sessionID string) ([]message.Message, error) {
 type preparedRun struct {
 	ctx              context.Context
 	prompt           string
+	systemPrompt     string
+	guardPrompt      string
 	history          *message.History
 	preCompactTokens int
 	normalized       Request
@@ -617,19 +695,6 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 	// Save the raw user message before any injections so auto-recall searches
 	// what the user actually said, not the enriched prompt with skill names etc.
 	rawUserPrompt := prompt
-
-	// Always prepend the real current date/time so the model uses the actual clock
-	// rather than its training-data cutoff when answering time-sensitive questions.
-	prompt = "[Current time: " + time.Now().Format("2006-01-02 15:04 MST") + "]\n" + prompt
-
-	// Inject available skills by scanning the filesystem on every request so the
-	// agent always knows what skills exist without calling ListSkills, and new
-	// skills installed after startup are immediately visible (no restart needed).
-	if rt.opts.ProjectRoot != "" {
-		if skillsSnippet := buildSkillsSnippet(rt.opts.ProjectRoot); skillsSnippet != "" {
-			prompt = skillsSnippet + prompt
-		}
-	}
 
 	// Process attachments (convert to base64)
 	var msgAttachments []model.MessageAttachment
@@ -766,10 +831,25 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 		}
 	}
 
+	systemPrompt := strings.TrimSpace(rt.opts.SystemPrompt)
+	if contextSnippet := buildSystemContextSnippet(rt.opts.ProjectRoot, time.Now()); contextSnippet != "" {
+		if systemPrompt == "" {
+			systemPrompt = contextSnippet
+		} else {
+			systemPrompt = systemPrompt + "\n\n## Runtime Context\n\n" + contextSnippet
+		}
+	}
+
 	whitelist := combineToolWhitelists(normalized.ToolWhitelist, nil)
+	guardPrompt := strings.TrimSpace(rt.guardBaseSystemPrompt)
+	if guardPrompt == "" {
+		guardPrompt = strings.TrimSpace(rt.opts.SystemPrompt)
+	}
 	return preparedRun{
 		ctx:              ctx,
 		prompt:           prompt,
+		systemPrompt:     systemPrompt,
+		guardPrompt:      guardPrompt,
 		history:          history,
 		preCompactTokens: preCompactTokens,
 		normalized:       normalized,
@@ -822,20 +902,23 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		progressInterval: rt.opts.ProgressInterval,
 	}
 	modelAdapter := &conversationModel{
-		base:         selectedModel,
-		history:      prep.history,
-		prompt:       prep.prompt,
-		trimmer:      rt.newTrimmer(),
-		tools:        availableTools(rt.registry, prep.toolWhitelist),
-		systemPrompt: rt.opts.SystemPrompt,
-		rulesLoader:  rt.rulesLoader,
-		enableCache:  enableCache,
-		hooks:        hookAdapter,
-		recorder:     prep.recorder,
-		compactor:    rt.compactor,
-		sessionID:    prep.normalized.SessionID,
-		logger:       rt.logger,
-		attachments:  prep.attachments,
+		base:               selectedModel,
+		history:            prep.history,
+		prompt:             prep.prompt,
+		trimmer:            rt.newTrimmer(),
+		tools:              availableTools(rt.registry, prep.toolWhitelist),
+		systemPrompt:       prep.systemPrompt,
+		guardPrompt:        prep.guardPrompt,
+		rulesLoader:        rt.rulesLoader,
+		enableCache:        enableCache,
+		hooks:              hookAdapter,
+		recorder:           prep.recorder,
+		compactor:          rt.compactor,
+		sessionID:          prep.normalized.SessionID,
+		logger:             rt.logger,
+		attachments:        prep.attachments,
+		outputGuardEnabled: rt.outputGuardEnabled(),
+		requestID:          prep.normalized.RequestID,
 	}
 
 	toolExec := &runtimeToolExecutor{
@@ -1411,22 +1494,25 @@ func (rt *Runtime) sessionMemoryFlushAtCompaction(sessionID string) (int64, bool
 // ----------------- adapters -----------------
 
 type conversationModel struct {
-	base         model.Model
-	history      *message.History
-	prompt       string
-	trimmer      *message.Trimmer
-	tools        []model.ToolDefinition
-	systemPrompt string
-	rulesLoader  *config.RulesLoader
-	enableCache  bool // Enable prompt caching for this conversation
-	usage        model.Usage
-	stopReason   string
-	hooks        *runtimeHookAdapter
-	recorder     *hookRecorder
-	compactor    *compactor
-	sessionID    string
-	logger       logger.Logger
-	attachments  []model.MessageAttachment // Images for vision API
+	base               model.Model
+	history            *message.History
+	prompt             string
+	trimmer            *message.Trimmer
+	tools              []model.ToolDefinition
+	systemPrompt       string
+	guardPrompt        string
+	rulesLoader        *config.RulesLoader
+	enableCache        bool // Enable prompt caching for this conversation
+	usage              model.Usage
+	stopReason         string
+	hooks              *runtimeHookAdapter
+	recorder           *hookRecorder
+	compactor          *compactor
+	sessionID          string
+	logger             logger.Logger
+	attachments        []model.MessageAttachment // Images for vision API
+	outputGuardEnabled bool
+	requestID          string
 }
 
 func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*agent.ModelOutput, error) {
@@ -1488,7 +1574,31 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 	// in non-streaming mode but work correctly with streaming. Streaming is
 	// also the production-standard path for the Anthropic API.
 	var resp *model.Response
+	emit := streamEmitFromContext(ctx)
+	textStreamed := false
+	textBlockStarted := false
+	textBlockIndex := 0
 	if err := m.base.CompleteStream(ctx, req, func(sr model.StreamResult) error {
+		if sr.Delta != "" && emit != nil {
+			if !textBlockStarted {
+				idx := textBlockIndex
+				emit(ctx, StreamEvent{
+					Type:         EventContentBlockStart,
+					Index:        &idx,
+					ContentBlock: &ContentBlock{Type: "text"},
+				})
+				textBlockStarted = true
+			}
+			for _, r := range sr.Delta {
+				idx := textBlockIndex
+				emit(ctx, StreamEvent{
+					Type:  EventContentBlockDelta,
+					Index: &idx,
+					Delta: &Delta{Type: "text_delta", Text: string(r)},
+				})
+			}
+			textStreamed = true
+		}
 		if sr.Final && sr.Response != nil {
 			resp = sr.Response
 		}
@@ -1496,10 +1606,14 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 	}); err != nil {
 		return nil, err
 	}
+	if textBlockStarted && emit != nil {
+		idx := textBlockIndex
+		emit(ctx, StreamEvent{Type: EventContentBlockStop, Index: &idx})
+	}
 	if resp == nil {
 		return nil, errors.New("model returned no final response")
 	}
-	m.usage = resp.Usage
+	m.usage = mergeUsage(m.usage, resp.Usage)
 	m.stopReason = resp.StopReason
 
 	// Populate middleware state with model response and usage
@@ -1511,6 +1625,9 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 		st.Values["model.response"] = resp
 		st.Values["model.usage"] = resp.Usage
 		st.Values["model.stop_reason"] = resp.StopReason
+		if textStreamed {
+			st.Values["model.text_streamed"] = true
+		}
 	}
 
 	assistant := message.Message{Role: resp.Message.Role, Content: strings.TrimSpace(resp.Message.Content)}
@@ -1518,6 +1635,20 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 		assistant.ToolCalls = make([]message.ToolCall, len(resp.Message.ToolCalls))
 		for i, call := range resp.Message.ToolCalls {
 			assistant.ToolCalls[i] = message.ToolCall{ID: call.ID, Name: call.Name, Arguments: call.Arguments}
+		}
+	}
+	if m.outputGuardEnabled {
+		originalContent := assistant.Content
+		guardPrompt := strings.TrimSpace(m.guardPrompt)
+		if guardPrompt == "" {
+			guardPrompt = m.systemPrompt
+		}
+		if redacted, blocked, reason := redactAssistantDisclosure(assistant.Content, guardPrompt); blocked {
+			if m.logger != nil {
+				m.logger.Warnf("[agentsdk] output_guard_redacted: session=%s request=%s reason=%s output=%q", m.sessionID, strings.TrimSpace(m.requestID), reason, originalContent)
+			}
+			assistant.Content = redacted
+			assistant.ToolCalls = nil
 		}
 	}
 	// Fix null/empty tool_use.input BEFORE appending to history.
@@ -2279,25 +2410,52 @@ func loadImageAsBase64(filePath, mimeType string) (string, string, error) {
 	return encoded, mimeType, nil
 }
 
-// buildSkillsSnippet returns a compact skills-list string to prepend to every
-// prompt. It delegates to toolbuiltin.ScanSkillsList so frontmatter parsing
-// is not duplicated. Scanning the filesystem on each request is intentional:
-// new skills installed after startup are immediately visible without restart.
+// buildSkillsSnippet returns structured available-skills metadata used for
+// context reporting. It delegates to toolbuiltin.ScanSkillsList so frontmatter
+// parsing is not duplicated.
 func buildSkillsSnippet(projectRoot string) string {
 	list := toolbuiltin.ScanSkillsList(projectRoot)
 	if len(list) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("[Available skills (use the Skill tool to invoke):")
+	b.WriteString("<available_skills>")
 	for _, s := range list {
-		b.WriteString("\n- ")
-		b.WriteString(s.Name)
+		b.WriteString("\n  <skill>")
+		b.WriteString("\n    <name>")
+		b.WriteString(escapePromptTagValue(s.Name))
+		b.WriteString("</name>")
 		if s.Description != "" {
-			b.WriteString(": ")
-			b.WriteString(s.Description)
+			b.WriteString("\n    <description>")
+			b.WriteString(escapePromptTagValue(s.Description))
+			b.WriteString("</description>")
 		}
+		if s.Location != "" {
+			b.WriteString("\n    <location>")
+			b.WriteString(escapePromptTagValue(s.Location))
+			b.WriteString("</location>")
+		}
+		b.WriteString("\n  </skill>")
 	}
-	b.WriteString("]\n")
+	b.WriteString("\n</available_skills>")
 	return b.String()
+}
+
+func buildSystemContextSnippet(projectRoot string, now time.Time) string {
+	var sections []string
+	sections = append(sections, "<current_time>"+escapePromptTagValue(now.Format("2006-01-02 15:04 MST"))+"</current_time>")
+	if skillsSnippet := buildSkillsSnippet(projectRoot); skillsSnippet != "" {
+		sections = append(sections, skillsSnippet)
+	}
+	return strings.Join(sections, "\n")
+}
+
+var promptTagEscaper = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+)
+
+func escapePromptTagValue(value string) string {
+	return promptTagEscaper.Replace(strings.TrimSpace(value))
 }

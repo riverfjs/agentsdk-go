@@ -12,6 +12,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Send files to the user in-channel."
+	registerShortToolDesc("send_file", shortToolDesc)
+}
+
 const sendFileDescription = `Use this tool to send files (images, documents, etc.) to the user during execution. 
 
 Common use cases:

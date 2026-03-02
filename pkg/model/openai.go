@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"sort"
@@ -100,6 +101,7 @@ func (m *openaiModel) Complete(ctx context.Context, req Request) (*Response, err
 		if err != nil {
 			return err
 		}
+		logOpenAIRequestIfEnabled(req, params)
 
 		completion, err := m.completions.New(ctx, params)
 		if err != nil {
@@ -126,6 +128,7 @@ func (m *openaiModel) CompleteStream(ctx context.Context, req Request, cb Stream
 		if err != nil {
 			return err
 		}
+		logOpenAIRequestIfEnabled(req, params)
 
 		// Enable usage reporting in stream
 		params.StreamOptions = openai.ChatCompletionStreamOptionsParam{
@@ -536,8 +539,22 @@ func convertOpenAIResponse(completion *openai.ChatCompletion) *Response {
 
 func convertOpenAIUsage(usage openai.CompletionUsage) Usage {
 	return Usage{
-		InputTokens:  int(usage.PromptTokens),
-		OutputTokens: int(usage.CompletionTokens),
-		TotalTokens:  int(usage.TotalTokens),
+		InputTokens:      int(usage.PromptTokens),
+		OutputTokens:     int(usage.CompletionTokens),
+		TotalTokens:      int(usage.TotalTokens),
+		CacheReadTokens:  int(usage.PromptTokensDetails.CachedTokens),
+		// OpenAI chat/completions usage currently does not expose an explicit
+		// "cache creation" counter analogous to Anthropic's field.
+		CacheCreationTokens: 0,
 	}
+}
+
+func logOpenAIRequestIfEnabled(req Request, params openai.ChatCompletionNewParams) {
+	reqBody, errReq := json.Marshal(req)
+	paramsBody, errParams := json.Marshal(params)
+	if errReq != nil || errParams != nil {
+		log.Printf("[openai] request_log_failed req_err=%v params_err=%v", errReq, errParams)
+		return
+	}
+	log.Printf("[openai] raw_request req=%s params=%s", string(reqBody), string(paramsBody))
 }

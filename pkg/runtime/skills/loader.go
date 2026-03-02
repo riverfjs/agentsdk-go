@@ -193,9 +193,10 @@ func LoadFromFS(opts LoaderOptions) ([]SkillRegistration, []error) {
 		seen[file.Metadata.Name] = file.Path
 
 		def := Definition{
-			Name:        file.Metadata.Name,
-			Description: file.Metadata.Description,
-			Metadata:    buildDefinitionMetadata(file),
+			Name:                  file.Metadata.Name,
+			Description:           file.Metadata.Description,
+			DisableAutoActivation: true,
+			Metadata:              buildDefinitionMetadata(file),
 		}
 		reg := SkillRegistration{
 			Definition: def,

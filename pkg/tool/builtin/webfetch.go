@@ -19,6 +19,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Fetch and extract readable content from URLs."
+	registerShortToolDesc("web_fetch", shortToolDesc)
+}
+
 const (
 	webFetchDescription = `
 	- Fetches content from a specified URL and processes it using an AI model

@@ -10,6 +10,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Check status of background shell tasks."
+	registerShortToolDesc("bash_status", shortToolDesc)
+}
+
 const bashStatusDescription = "Check async bash task status without consuming output."
 
 var bashStatusSchema = &tool.JSONSchema{

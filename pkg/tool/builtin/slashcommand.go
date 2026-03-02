@@ -10,6 +10,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Run a registered slash command."
+	registerShortToolDesc("slash_command", shortToolDesc)
+}
+
 const slashCommandDescriptionHeader = `Execute a slash command within the main conversation
 
 **IMPORTANT - Intent Matching:**

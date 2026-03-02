@@ -8,13 +8,20 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	xhtml "golang.org/x/net/html"
 
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
+
+func init() {
+	const shortToolDesc = "Search the web for up-to-date information."
+	registerShortToolDesc("web_search", shortToolDesc)
+}
 
 const (
 	webSearchDescription = `
@@ -32,6 +39,8 @@ const (
 	defaultSearchTimeout          = 12 * time.Second
 	maxSearchTimeout              = 45 * time.Second
 	defaultSearchMaxResults       = 8
+	defaultSearchCacheTTL         = 90 * time.Second
+	defaultSearchFailureTTL       = 45 * time.Second
 	maxSearchResponseBytes    int = 1 << 20
 	defaultSearchUserAgent        = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 	duckDuckGoFormContentType     = "application/x-www-form-urlencoded"
@@ -72,6 +81,8 @@ type WebSearchOptions struct {
 	HTTPClient *http.Client
 	Timeout    time.Duration
 	MaxResults int
+	CacheTTL   time.Duration
+	FailureTTL time.Duration
 }
 
 // WebSearchTool proxies search queries to an HTTP endpoint and filters domains.
@@ -79,6 +90,22 @@ type WebSearchTool struct {
 	client     *http.Client
 	timeout    time.Duration
 	maxResults int
+	cacheTTL   time.Duration
+	failureTTL time.Duration
+	now        func() time.Time
+	mu         sync.RWMutex
+	cache      map[string]searchCacheEntry
+	failures   map[string]searchFailureEntry
+}
+
+type searchCacheEntry struct {
+	expiresAt time.Time
+	results   []SearchResult
+}
+
+type searchFailureEntry struct {
+	expiresAt time.Time
+	status    int
 }
 
 // NewWebSearchTool constructs a search tool with defaults.
@@ -97,6 +124,14 @@ func NewWebSearchTool(opts *WebSearchOptions) *WebSearchTool {
 	if maxResults <= 0 {
 		maxResults = defaultSearchMaxResults
 	}
+	cacheTTL := cfg.CacheTTL
+	if cacheTTL <= 0 {
+		cacheTTL = defaultSearchCacheTTL
+	}
+	failureTTL := cfg.FailureTTL
+	if failureTTL <= 0 {
+		failureTTL = defaultSearchFailureTTL
+	}
 	client := cloneHTTPClient(cfg.HTTPClient)
 	client.Timeout = timeout
 
@@ -104,6 +139,11 @@ func NewWebSearchTool(opts *WebSearchOptions) *WebSearchTool {
 		client:     client,
 		timeout:    timeout,
 		maxResults: maxResults,
+		cacheTTL:   cacheTTL,
+		failureTTL: failureTTL,
+		now:        time.Now,
+		cache:      make(map[string]searchCacheEntry),
+		failures:   make(map[string]searchFailureEntry),
 	}
 }
 
@@ -141,6 +181,25 @@ func (w *WebSearchTool) Execute(ctx context.Context, params map[string]interface
 	if err != nil {
 		return nil, err
 	}
+	cacheKey := buildSearchCacheKey(query, allowed, blocked)
+	now := w.now()
+	if status, blockedRepeat := w.getSuppressedFailure(cacheKey, now); blockedRepeat {
+		return nil, fmt.Errorf("search skipped: previous request failed with status %d (cooldown active)", status)
+	}
+	if cached, ok := w.getCachedResults(cacheKey, now); ok {
+		filtered := filterResultsByDomain(cached, allowed, blocked, w.maxResults)
+		return &tool.ToolResult{
+			Success: true,
+			Output:  formatSearchOutput(query, filtered),
+			Data: map[string]interface{}{
+				"query":           query,
+				"results":         filtered,
+				"allowed_domains": allowed,
+				"blocked_domains": blocked,
+				"cache_hit":       true,
+			},
+		}, nil
+	}
 
 	reqCtx := ctx
 	var cancel context.CancelFunc
@@ -151,8 +210,13 @@ func (w *WebSearchTool) Execute(ctx context.Context, params map[string]interface
 
 	results, err := w.search(reqCtx, query)
 	if err != nil {
+		if status, ok := statusFromError(err); ok && shouldSuppressStatus(status) {
+			w.setSuppressedFailure(cacheKey, status, now)
+		}
 		return nil, err
 	}
+	w.setCachedResults(cacheKey, results, now)
+	w.clearSuppressedFailure(cacheKey)
 
 	filtered := filterResultsByDomain(results, allowed, blocked, w.maxResults)
 
@@ -162,6 +226,7 @@ func (w *WebSearchTool) Execute(ctx context.Context, params map[string]interface
 		"results":         filtered,
 		"allowed_domains": allowed,
 		"blocked_domains": blocked,
+		"cache_hit":       false,
 	}
 
 	return &tool.ToolResult{
@@ -169,6 +234,17 @@ func (w *WebSearchTool) Execute(ctx context.Context, params map[string]interface
 		Output:  output,
 		Data:    data,
 	}, nil
+}
+
+type searchStatusError struct {
+	status int
+}
+
+func (e *searchStatusError) Error() string {
+	if e == nil {
+		return "search failed"
+	}
+	return fmt.Sprintf("search failed with status %d", e.status)
 }
 
 func (w *WebSearchTool) search(ctx context.Context, query string) ([]SearchResult, error) {
@@ -193,7 +269,7 @@ func (w *WebSearchTool) search(ctx context.Context, query string) ([]SearchResul
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("search failed with status %d", resp.StatusCode)
+		return nil, &searchStatusError{status: resp.StatusCode}
 	}
 
 	reader := io.LimitReader(resp.Body, int64(maxSearchResponseBytes)+1)
@@ -494,4 +570,86 @@ func formatSearchOutput(query string, results []SearchResult) string {
 		}
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+func buildSearchCacheKey(query string, allowed, blocked []string) string {
+	q := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(query)), " "))
+	allow := append([]string(nil), allowed...)
+	block := append([]string(nil), blocked...)
+	sort.Strings(allow)
+	sort.Strings(block)
+	return q + "|a:" + strings.Join(allow, ",") + "|b:" + strings.Join(block, ",")
+}
+
+func (w *WebSearchTool) getCachedResults(key string, now time.Time) ([]SearchResult, bool) {
+	w.mu.RLock()
+	entry, ok := w.cache[key]
+	w.mu.RUnlock()
+	if !ok || !entry.expiresAt.After(now) {
+		if ok {
+			w.mu.Lock()
+			delete(w.cache, key)
+			w.mu.Unlock()
+		}
+		return nil, false
+	}
+	out := make([]SearchResult, len(entry.results))
+	copy(out, entry.results)
+	return out, true
+}
+
+func (w *WebSearchTool) setCachedResults(key string, results []SearchResult, now time.Time) {
+	if len(results) == 0 {
+		return
+	}
+	out := make([]SearchResult, len(results))
+	copy(out, results)
+	w.mu.Lock()
+	w.cache[key] = searchCacheEntry{
+		expiresAt: now.Add(w.cacheTTL),
+		results:   out,
+	}
+	w.mu.Unlock()
+}
+
+func (w *WebSearchTool) getSuppressedFailure(key string, now time.Time) (int, bool) {
+	w.mu.RLock()
+	entry, ok := w.failures[key]
+	w.mu.RUnlock()
+	if !ok || !entry.expiresAt.After(now) {
+		if ok {
+			w.mu.Lock()
+			delete(w.failures, key)
+			w.mu.Unlock()
+		}
+		return 0, false
+	}
+	return entry.status, true
+}
+
+func (w *WebSearchTool) setSuppressedFailure(key string, status int, now time.Time) {
+	w.mu.Lock()
+	w.failures[key] = searchFailureEntry{
+		expiresAt: now.Add(w.failureTTL),
+		status:    status,
+	}
+	w.mu.Unlock()
+}
+
+func (w *WebSearchTool) clearSuppressedFailure(key string) {
+	w.mu.Lock()
+	delete(w.failures, key)
+	w.mu.Unlock()
+}
+
+func statusFromError(err error) (int, bool) {
+	var statusErr *searchStatusError
+	if errors.As(err, &statusErr) && statusErr != nil {
+		return statusErr.status, true
+	}
+	return 0, false
+}
+
+func shouldSuppressStatus(status int) bool {
+	return status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusNotFound
 }

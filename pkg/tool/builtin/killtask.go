@@ -10,6 +10,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Terminate a running background shell task."
+	registerShortToolDesc("kill_task", shortToolDesc)
+}
+
 const killTaskDescription = "Terminate a running async bash task."
 
 var killTaskSchema = &tool.JSONSchema{

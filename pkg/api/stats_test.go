@@ -209,3 +209,39 @@ func TestTokenTracker_NilReceiver(t *testing.T) {
 		t.Fatalf("expected disabled for nil receiver")
 	}
 }
+
+func TestTokenTracker_ResetSession(t *testing.T) {
+	tr := newTokenTracker(true, nil)
+	ts := time.Now().UTC()
+	tr.Record(TokenStats{
+		InputTokens:  10,
+		OutputTokens: 5,
+		TotalTokens:  15,
+		Model:        "m1",
+		SessionID:    "s1",
+		Timestamp:    ts,
+	})
+	tr.Record(TokenStats{
+		InputTokens:  3,
+		OutputTokens: 2,
+		TotalTokens:  5,
+		Model:        "m1",
+		SessionID:    "s2",
+		Timestamp:    ts,
+	})
+
+	tr.ResetSession("s1")
+	if got := tr.GetSessionStats("s1"); got != nil {
+		t.Fatalf("expected s1 to be cleared, got %+v", got)
+	}
+	total := tr.GetTotalStats()
+	if total == nil {
+		t.Fatal("expected total stats")
+	}
+	if total.TotalTokens != 5 || total.TotalInput != 3 || total.TotalOutput != 2 {
+		t.Fatalf("unexpected totals after reset: %+v", total)
+	}
+	if by := total.ByModel["m1"]; by == nil || by.TotalTokens != 5 || by.RequestCount != 1 {
+		t.Fatalf("unexpected model totals after reset: %+v", by)
+	}
+}

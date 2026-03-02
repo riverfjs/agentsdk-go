@@ -39,6 +39,37 @@ func TestAvailableToolsAndSchemaToMap(t *testing.T) {
 	if schema := schemaToMap(&tool.JSONSchema{Type: "object", Properties: map[string]any{"a": "b"}}); schema["type"] != "object" {
 		t.Fatalf("unexpected schema map %v", schema)
 	}
+	if defs[0].Description == "" {
+		t.Fatalf("expected non-empty description")
+	}
+}
+
+type helperLongDescTool struct{}
+
+func (s *helperLongDescTool) Name() string { return "custom_tool" }
+func (s *helperLongDescTool) Description() string {
+	return "first short line\nsecond long line with details"
+}
+func (s *helperLongDescTool) Schema() *tool.JSONSchema {
+	return &tool.JSONSchema{Type: "object"}
+}
+func (s *helperLongDescTool) Execute(context.Context, map[string]interface{}) (*tool.ToolResult, error) {
+	return &tool.ToolResult{Success: true}, nil
+}
+
+func TestAvailableToolsDescriptionFallbackFirstLine(t *testing.T) {
+	t.Parallel()
+	reg := tool.NewRegistry()
+	if err := reg.Register(&helperLongDescTool{}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	defs := availableTools(reg, nil)
+	if len(defs) != 1 {
+		t.Fatalf("expected one tool, got %d", len(defs))
+	}
+	if defs[0].Description != "first short line" {
+		t.Fatalf("unexpected fallback description: %q", defs[0].Description)
+	}
 }
 
 func TestRegisterHelpers(t *testing.T) {

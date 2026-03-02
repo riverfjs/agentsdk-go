@@ -13,6 +13,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func init() {
+	const shortToolDesc = "List installed skills in workspace."
+	registerShortToolDesc("listskills", shortToolDesc)
+}
+
 const listSkillsDescription = `List all installed skills available in the workspace.
 
 Returns the name and description of every skill found under
@@ -154,6 +159,7 @@ func (t *ListSkillsTool) Execute(ctx context.Context, params map[string]interfac
 type SkillSummary struct {
 	Name        string
 	Description string
+	Location    string
 }
 
 // ScanSkillsList reads {workspaceDir}/.claude/skills/*/SKILL.md and returns
@@ -182,6 +188,7 @@ func ScanSkillsList(workspaceDir string) []SkillSummary {
 		out = append(out, SkillSummary{
 			Name:        name,
 			Description: strings.TrimSpace(meta.Description),
+			Location:    filepath.Join(skillsDir, e.Name(), "SKILL.md"),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

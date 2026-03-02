@@ -11,6 +11,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Create or update memory files safely."
+	registerShortToolDesc("memorywrite", shortToolDesc)
+}
+
 const memoryWriteDescription = `Unified memory writer/editor for MEMORY.md and memory/*.md.
 
 Usage:

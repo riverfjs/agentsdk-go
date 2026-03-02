@@ -13,6 +13,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Update task status, owner, or dependencies."
+	registerShortToolDesc("task_update", shortToolDesc)
+}
+
 const taskUpdateDescription = "Update a task's status, owner, and dependencies. Use delete=true to delete tasks."
 
 var taskUpdateSchema = &tool.JSONSchema{

@@ -10,6 +10,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Get one task with full details."
+	registerShortToolDesc("task_get", shortToolDesc)
+}
+
 const taskGetDescription = "Retrieve a task by ID with full block/blocker details."
 
 var taskGetSchema = &tool.JSONSchema{

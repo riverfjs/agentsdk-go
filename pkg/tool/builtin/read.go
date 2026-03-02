@@ -32,6 +32,11 @@ Usage:
 - If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.`
 )
 
+func init() {
+	const shortToolDesc = "Read file content from local workspace."
+	registerShortToolDesc("read", shortToolDesc)
+}
+
 var readSchema = &tool.JSONSchema{
 	Type: "object",
 	Properties: map[string]interface{}{

@@ -11,6 +11,11 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
+func init() {
+	const shortToolDesc = "Execute an installed skill in conversation."
+	registerShortToolDesc("skill", shortToolDesc)
+}
+
 const skillToolDescriptionHeader = `Execute a skill within the main conversation
 
 <skills_instructions>

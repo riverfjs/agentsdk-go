@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/riverfjs/agentsdk-go/pkg/config"
 	"github.com/riverfjs/agentsdk-go/pkg/message"
 	"github.com/riverfjs/agentsdk-go/pkg/model"
+	toolbuiltin "github.com/riverfjs/agentsdk-go/pkg/tool/builtin"
 	"github.com/riverfjs/agentsdk-go/pkg/runtime/commands"
 	"github.com/riverfjs/agentsdk-go/pkg/runtime/skills"
 	"github.com/riverfjs/agentsdk-go/pkg/runtime/subagents"
@@ -46,12 +48,113 @@ func availableTools(registry *tool.Registry, whitelist map[string]struct{}) []mo
 		}
 		defs = append(defs, model.ToolDefinition{
 			Name:        name,
-			Description: strings.TrimSpace(impl.Description()),
+			Description: shortToolDescription(name, impl.Description()),
 			Parameters:  schemaToMap(impl.Schema()),
 		})
 	}
 	sort.Slice(defs, func(i, j int) bool { return defs[i].Name < defs[j].Name })
 	return defs
+}
+
+func shortToolDescription(name, fallback string) string {
+	if short, ok := toolbuiltin.LookupShortToolDesc(name); ok {
+		if trimmed := strings.TrimSpace(short); trimmed != "" {
+			return trimmed
+		}
+	}
+	firstLine := ""
+	for _, line := range strings.Split(strings.TrimSpace(fallback), "\n") {
+		line = strings.TrimSpace(strings.TrimLeft(line, "-*#`"))
+		if line != "" {
+			firstLine = line
+			break
+		}
+	}
+	if firstLine == "" {
+		firstLine = "Tool capability."
+	}
+	if len(firstLine) > 120 {
+		firstLine = firstLine[:120] + "..."
+	}
+	return firstLine
+}
+
+type ContextReport struct {
+	SystemChars int                 `json:"systemChars"`
+	SkillsChars int                 `json:"skillsChars"`
+	Tools       ContextToolsReport  `json:"tools"`
+	EstTokens   ContextTokensReport `json:"estTokens"`
+}
+
+type ContextToolsReport struct {
+	Count       int                    `json:"count"`
+	ListChars   int                    `json:"listChars"`
+	SchemaChars int                    `json:"schemaChars"`
+	Entries     []ContextToolEntry     `json:"entries"`
+}
+
+type ContextToolEntry struct {
+	Name        string `json:"name"`
+	SummaryChars int   `json:"summaryChars"`
+	SchemaChars int    `json:"schemaChars"`
+}
+
+type ContextTokensReport struct {
+	System int `json:"system"`
+	Skills int `json:"skills"`
+	Tools  int `json:"tools"`
+	Total  int `json:"total"`
+}
+
+func estimateTokens(chars int) int {
+	if chars <= 0 {
+		return 0
+	}
+	return (chars + 3) / 4
+}
+
+func buildContextReport(systemPrompt, skillsSnippet string, defs []model.ToolDefinition) ContextReport {
+	entries := make([]ContextToolEntry, 0, len(defs))
+	listChars := 0
+	schemaChars := 0
+	for _, d := range defs {
+		summaryChars := len(strings.TrimSpace(d.Description))
+		line := "- " + d.Name
+		if summaryChars > 0 {
+			line += ": " + strings.TrimSpace(d.Description)
+		}
+		listChars += len(line) + 1
+		raw, _ := json.Marshal(d.Parameters)
+		sc := len(raw)
+		schemaChars += sc
+		entries = append(entries, ContextToolEntry{
+			Name:         d.Name,
+			SummaryChars: summaryChars,
+			SchemaChars:  sc,
+		})
+	}
+	systemChars := len(systemPrompt)
+	skillsChars := len(skillsSnippet)
+	toolsChars := listChars + schemaChars
+	tkSystem := estimateTokens(systemChars)
+	tkSkills := estimateTokens(skillsChars)
+	tkTools := estimateTokens(toolsChars)
+	return ContextReport{
+		SystemChars: systemChars,
+		SkillsChars: skillsChars,
+		Tools: ContextToolsReport{
+			Count:       len(defs),
+			ListChars:   listChars,
+			SchemaChars: schemaChars,
+			Entries:     entries,
+		},
+		EstTokens: ContextTokensReport{
+			System: tkSystem,
+			Skills: tkSkills,
+			Tools:  tkTools,
+			Total:  tkSystem + tkSkills + tkTools,
+		},
+	}
 }
 
 func schemaToMap(schema *tool.JSONSchema) map[string]any {

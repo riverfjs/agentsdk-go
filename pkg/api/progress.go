@@ -55,9 +55,20 @@ func (p *progressMiddleware) AfterModel(ctx context.Context, st *middleware.Stat
 
 	idx := 0
 	text := out.Content
-	p.textBlock(ctx, idx, text)
-	if text != "" {
-		idx++
+	textStreamed := false
+	if st != nil && st.Values != nil {
+		if v, ok := st.Values["model.text_streamed"].(bool); ok && v {
+			textStreamed = true
+		}
+	}
+	if !textStreamed {
+		p.textBlock(ctx, idx, text)
+		if text != "" {
+			idx++
+		}
+	} else if text != "" {
+		// Text block index 0 was already emitted live in conversationModel.Generate.
+		idx = 1
 	}
 
 	for _, call := range out.ToolCalls {

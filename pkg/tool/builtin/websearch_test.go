@@ -7,13 +7,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	xhtml "golang.org/x/net/html"
 )
 
 func TestWebSearchExecute(t *testing.T) {
-	t.Parallel()
-
 	html := `<html><body>
 <div class="result">
   <a class="result__a" href="https://example.com">Example</a>
@@ -175,6 +174,127 @@ func TestWebSearchHTMLHelpers(t *testing.T) {
 	}
 	if got := nodeText(root); got != "hello world" {
 		t.Fatalf("unexpected node text %q", got)
+	}
+}
+
+func TestWebSearchExecute_CacheHitSkipsSecondHTTPCall(t *testing.T) {
+	calls := 0
+	html := `<html><body><div class="result"><a class="result__a" href="https://example.com">Example</a></div></body></html>`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(html))
+	}))
+	defer server.Close()
+
+	orig := duckDuckGoEndpoint
+	duckDuckGoEndpoint = server.URL
+	t.Cleanup(func() { duckDuckGoEndpoint = orig })
+
+	tool := NewWebSearchTool(&WebSearchOptions{
+		HTTPClient: server.Client(),
+		CacheTTL:   2 * time.Minute,
+	})
+
+	first, err := tool.Execute(context.Background(), map[string]any{"query": "Iran latest"})
+	if err != nil {
+		t.Fatalf("first execute failed: %v", err)
+	}
+	second, err := tool.Execute(context.Background(), map[string]any{"query": "  iran   latest  "})
+	if err != nil {
+		t.Fatalf("second execute failed: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected 1 upstream call with cache hit, got %d", calls)
+	}
+	if first.Data.(map[string]any)["cache_hit"] != false || second.Data.(map[string]any)["cache_hit"] != true {
+		t.Fatalf("unexpected cache flags: first=%v second=%v", first.Data, second.Data)
+	}
+}
+
+func TestWebSearchExecute_CacheKeyRespectsDomainFilters(t *testing.T) {
+	calls := 0
+	html := `<html><body><div class="result"><a class="result__a" href="https://example.com">Example</a></div></body></html>`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(html))
+	}))
+	defer server.Close()
+
+	orig := duckDuckGoEndpoint
+	duckDuckGoEndpoint = server.URL
+	t.Cleanup(func() { duckDuckGoEndpoint = orig })
+
+	tool := NewWebSearchTool(&WebSearchOptions{
+		HTTPClient: server.Client(),
+		CacheTTL:   2 * time.Minute,
+	})
+	_, _ = tool.Execute(context.Background(), map[string]any{
+		"query":           "Iran latest",
+		"allowed_domains": []string{"example.com"},
+	})
+	_, _ = tool.Execute(context.Background(), map[string]any{
+		"query":           "Iran latest",
+		"allowed_domains": []string{"another.com"},
+	})
+	if calls != 2 {
+		t.Fatalf("expected cache separation by domain filters, got calls=%d", calls)
+	}
+}
+
+func TestWebSearchExecute_SuppressesRepeated403WithinFailureTTL(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	orig := duckDuckGoEndpoint
+	duckDuckGoEndpoint = server.URL
+	t.Cleanup(func() { duckDuckGoEndpoint = orig })
+
+	tool := NewWebSearchTool(&WebSearchOptions{
+		HTTPClient: server.Client(),
+		FailureTTL: time.Minute,
+	})
+	if _, err := tool.Execute(context.Background(), map[string]any{"query": "Iran latest"}); err == nil {
+		t.Fatal("expected first call to fail with 403")
+	}
+	if _, err := tool.Execute(context.Background(), map[string]any{"query": "Iran latest"}); err == nil {
+		t.Fatal("expected suppressed second call error")
+	} else if !strings.Contains(err.Error(), "cooldown active") {
+		t.Fatalf("unexpected second error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected second call suppressed without HTTP request, calls=%d", calls)
+	}
+}
+
+func TestWebSearchExecute_SuppressionExpiresAfterFailureTTL(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	orig := duckDuckGoEndpoint
+	duckDuckGoEndpoint = server.URL
+	t.Cleanup(func() { duckDuckGoEndpoint = orig })
+
+	tool := NewWebSearchTool(&WebSearchOptions{
+		HTTPClient: server.Client(),
+		FailureTTL: 30 * time.Millisecond,
+	})
+	if _, err := tool.Execute(context.Background(), map[string]any{"query": "Iran latest"}); err == nil {
+		t.Fatal("expected first call to fail")
+	}
+	time.Sleep(60 * time.Millisecond)
+	if _, err := tool.Execute(context.Background(), map[string]any{"query": "Iran latest"}); err == nil {
+		t.Fatal("expected second call to fail again after ttl expiry")
+	}
+	if calls != 2 {
+		t.Fatalf("expected request after suppression ttl expiry, calls=%d", calls)
 	}
 }
 
