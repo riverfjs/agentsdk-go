@@ -19,18 +19,21 @@ agentsdk-go is a modular agent development framework that implements core Claude
 ### Core Capabilities
 - **Multi-model Support**: Subagent-level model binding via `ModelFactory` interface
 - **Token Statistics**: Comprehensive token usage tracking with automatic accumulation
+- **Token Stats Persistence**: Aggregated stats are persisted at `.claude/token_stats.json`
 - **Auto Compact**: Automatic context compression when token threshold reached
 - **Async Bash**: Background command execution with task management
 - **Rules Configuration**: `.claude/rules/` directory support with hot-reload
 - **OpenTelemetry**: Distributed tracing with span propagation
 - **UUID Tracking**: Request-level UUID for observability
+- **Compact Tool Context**: Model-facing tool descriptions are compacted to reduce static prompt tokens
 
 ### Extended Builtin Tools
-- **`memory_write`**: Write or append to `MEMORY.md` (long-term facts) or `memory/YYYY-MM-DD.md` (daily journal). Paths outside these are rejected.
-- **`memory_get`**: Read specific line ranges from a memory file — use after `memory_search` to pull only needed lines.
-- **`memory_search`**: Semantic keyword search across `MEMORY.md` + all `memory/*.md` files. Returns ranked snippets with file path and line range. Agent is instructed to call this before answering questions about past events, decisions, or preferences.
+- **`memory_write`**: Unified memory editor with targets `today` (`memory/YYYY-MM-DD.md`), `projects` (`memory/projects.md`), `lessons` (`memory/lessons.md`), or explicit `path` (restricted to `MEMORY.md` and `memory/*.md`).
+- **`memory_get`**: Read specific line ranges from memory files (`MEMORY.md` or `memory/*.md`) after `memory_search` to keep context minimal.
+- **`memory_search`**: Semantic keyword search across `MEMORY.md` + `memory/*.md`, returning ranked snippets with path and line ranges.
 - **`list_skills`**: List available skills in the workspace `.claude/skills/` directory.
 - **Realtime Progress Events**: Each tool call emits a progress event with the current tool name and parameters (not cumulative).
+- **Web Search Resilience**: `web_search` uses normalized cache keys + short TTL cache and suppresses repeated 401/403/404 failures for a short cooldown.
 
 ### Auto-Recall (memory injection)
 
@@ -39,7 +42,7 @@ When `AutoRecall: true` is set in `Options`, the runtime automatically searches 
 ```
 user prompt
   ↓
-memory_search(prompt, topN=3)  ← keyword search across MEMORY.md + memory/*.md
+memory_search(prompt, topN=3)  ← keyword search across MEMORY.md + memory/*.md (including projects/lessons/today files)
   ↓
 <relevant-memories>
 - snippet 1 ...
@@ -159,7 +162,7 @@ User response
 ### Get the SDK
 
 ```bash
-go get github.com/cexll/agentsdk-go
+go get github.com/riverfjs/agentsdk-go
 ```
 
 ## Quick Start
@@ -276,6 +279,9 @@ for event := range events {
         fmt.Printf("\n[Tool Execution] %s\n", event.ToolName)
     case "tool_execution_stop":
         fmt.Printf("[Tool Result] %s\n", event.Output)
+    case "final_response":
+        // Complete api.Response emitted at stream end.
+        fmt.Println("\n[Stream Completed]")
     }
 }
 ```
@@ -435,10 +441,12 @@ Configuration precedence (high → low):
 runtime, err := api.New(ctx, api.Options{
     ProjectRoot:  ".",
     ModelFactory: provider,
-    // Token tracking callback
-    OnTokenUsage: func(stats api.TokenStats) {
+    // Enable aggregate token tracking
+    TokenTracking: true,
+    // Optional callback for per-call token usage
+    TokenCallback: func(stats api.TokenStats) {
         log.Printf("Tokens: input=%d, output=%d, cache_read=%d",
-            stats.InputTokens, stats.OutputTokens, stats.CacheReadTokens)
+            stats.InputTokens, stats.OutputTokens, stats.CacheRead)
     },
     // Auto compact settings
     CompactThreshold: 100000, // Trigger compact at 100k tokens
