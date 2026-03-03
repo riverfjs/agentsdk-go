@@ -754,5 +754,7 @@ func mapModelName(name string) anthropicsdk.Model {
 	if model, ok := modelLookup[trimmed]; ok {
 		return model
 	}
-	return defaultAnthropicModel
+	// Keep unknown model IDs as-is so upstream can validate and return an error.
+	// This enables fallback chains to trigger instead of silently masking config issues.
+	return anthropicsdk.Model(trimmed)
 }

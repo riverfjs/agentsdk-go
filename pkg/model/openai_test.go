@@ -70,11 +70,12 @@ func TestNewOpenAI(t *testing.T) {
 			errMsg:  "openai: api key required",
 		},
 		{
-			name: "default model when empty",
+			name: "model required when empty",
 			cfg: OpenAIConfig{
 				APIKey: "sk-test",
 			},
-			wantErr: false,
+			wantErr: true,
+			errMsg:  "openai: model required",
 		},
 		{
 			name: "with custom base URL",
@@ -541,6 +542,11 @@ func TestIsOpenAIRetryable(t *testing.T) {
 			name: "generic error retryable",
 			err:  errors.New("connection reset"),
 			want: true,
+		},
+		{
+			name: "distributor unavailable not retryable",
+			err:  errors.New("503 Service Unavailable: upstream distributor unavailable"),
+			want: false,
 		},
 	}
 

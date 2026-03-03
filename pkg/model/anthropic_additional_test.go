@@ -242,8 +242,8 @@ func TestAnthropicHelpers(t *testing.T) {
 		t.Fatalf("expected tracked total tokens")
 	}
 
-	if mapModelName("unknown") == "" {
-		t.Fatalf("expected default model mapping")
+	if got := mapModelName("unknown"); got != anthropicsdk.Model("unknown") {
+		t.Fatalf("expected passthrough model mapping, got %q", got)
 	}
 	if mapModelName(string(supportedAnthropicModels[0])) != supportedAnthropicModels[0] {
 		t.Fatalf("expected known model mapping")

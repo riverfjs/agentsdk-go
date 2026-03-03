@@ -77,11 +77,12 @@ func TestNewOpenAIResponses(t *testing.T) {
 			errMsg:  "openai: api key required",
 		},
 		{
-			name: "default model when empty",
+			name: "model required when empty",
 			cfg: OpenAIConfig{
 				APIKey: "sk-test",
 			},
-			wantErr: false,
+			wantErr: true,
+			errMsg:  "openai: model required",
 		},
 		{
 			name: "with custom base URL",
@@ -133,6 +134,11 @@ func TestNewOpenAIResponses(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				assert.NotNil(t, mdl)
+				if tt.name == "default max retries when zero" {
+					impl, ok := mdl.(*openaiResponsesModel)
+					require.True(t, ok)
+					assert.Equal(t, defaultOpenAIMaxRetries, impl.maxRetries)
+				}
 			}
 		})
 	}

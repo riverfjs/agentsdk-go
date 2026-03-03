@@ -80,6 +80,7 @@ func (c CompactConfig) withDefaults() CompactConfig {
 type compactor struct {
 	cfg         CompactConfig
 	model       model.Model
+	fallbacks   []string
 	limit       int
 	hooks       *corehooks.Executor
 	rollout     *RolloutWriter
@@ -88,7 +89,7 @@ type compactor struct {
 	mu          sync.Mutex
 }
 
-func newCompactor(projectRoot string, cfg CompactConfig, mdl model.Model, tokenLimit int, hooks *corehooks.Executor, log logger.Logger) *compactor {
+func newCompactor(projectRoot string, cfg CompactConfig, mdl model.Model, tokenLimit int, fallbackModels []string, hooks *corehooks.Executor, log logger.Logger) *compactor {
 	cfg = cfg.withDefaults()
 	if !cfg.Enabled {
 		return nil
@@ -101,11 +102,32 @@ func newCompactor(projectRoot string, cfg CompactConfig, mdl model.Model, tokenL
 	return &compactor{
 		cfg:     cfg,
 		model:   mdl,
+		fallbacks: normalizeFallbackModels(fallbackModels),
 		limit:   limit,
 		hooks:   hooks,
 		rollout: rollout,
 		logger:  log,
 	}
+}
+
+func normalizeFallbackModels(models []string) []string {
+	if len(models) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(models))
+	out := make([]string, 0, len(models))
+	for _, m := range models {
+		trimmed := strings.TrimSpace(m)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func (c *compactor) shouldCompact(msgCount, tokenCount int) bool {
@@ -344,13 +366,31 @@ func (c *compactor) completeSummary(ctx context.Context, req model.Request) (*mo
 	if c == nil || c.model == nil {
 		return nil, errors.New("api: summary model is nil")
 	}
-	attempts := 1 + c.cfg.MaxRetries
-	if attempts < 1 {
-		attempts = 1
+	attemptModels := make([]string, 0, len(c.fallbacks)+1)
+	first := strings.TrimSpace(req.Model)
+	if first == "" {
+		attemptModels = append(attemptModels, "")
+	} else {
+		attemptModels = append(attemptModels, first)
 	}
+	for _, fb := range c.fallbacks {
+		if fb == "" {
+			continue
+		}
+		if fb == first {
+			continue
+		}
+		attemptModels = append(attemptModels, fb)
+	}
+	allowedRetries := c.cfg.MaxRetries
+	if allowedRetries < 0 {
+		allowedRetries = 0
+	}
+	attempts := 1 + allowedRetries
 
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
+		req.Model = attemptModels[(attempt-1)%len(attemptModels)]
 		if attempt > 1 {
 			if delay := c.cfg.RetryDelay; delay > 0 {
 				timer := time.NewTimer(delay)
@@ -360,9 +400,6 @@ func (c *compactor) completeSummary(ctx context.Context, req model.Request) (*mo
 					return nil, ctx.Err()
 				case <-timer.C:
 				}
-			}
-			if fallback := strings.TrimSpace(c.cfg.FallbackModel); fallback != "" {
-				req.Model = fallback
 			}
 		}
 		var resp *model.Response

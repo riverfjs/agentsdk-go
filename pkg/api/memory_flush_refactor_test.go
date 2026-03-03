@@ -167,3 +167,30 @@ func TestPrepare_ContextWindowDoesNotTellUserReset(t *testing.T) {
 		}
 	}
 }
+
+func TestRunStream_TriggersMemoryFlushWhenThresholdReached(t *testing.T) {
+	rt := newMockRuntimeForMemoryFlush(Options{
+		Model:               memoryFlushOKModel{},
+		ContextWindowTokens: 100,
+		MemoryFlush: MemoryFlushConfig{
+			Enabled:             true,
+			ReserveTokensFloor:  20,
+			SoftThresholdTokens: 10,
+		},
+	})
+	sessionID := "stream-flush"
+	h := rt.histories.Get(sessionID)
+	h.Append(message.Message{Role: "user", Content: strings.Repeat("a", 280)}) // ~70 tokens (threshold reached)
+
+	stream, err := rt.RunStream(context.Background(), Request{Prompt: "hello", SessionID: sessionID})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	for range stream {
+		// consume all events
+	}
+
+	if _, ok := rt.sessionMemoryFlushAtCompact.Load(sessionID); !ok {
+		t.Fatal("expected memory flush mark for RunStream path")
+	}
+}

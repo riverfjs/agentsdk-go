@@ -42,11 +42,11 @@ type RealtimeEventType string
 
 const (
 	RealtimeEventProgressUpdate    RealtimeEventType = "progress_update"     // Progress report during execution
-	RealtimeEventErrorGuard        RealtimeEventType = "error_guard"         // Error threshold reached
 	RealtimeEventContextWindowWarn RealtimeEventType = "context_window_warn" // Context window approaching limit
 	RealtimeEventMemoryFlushStart  RealtimeEventType = "memory_flush_start"  // Automatic memory flush started
 	RealtimeEventMemoryFlushDone   RealtimeEventType = "memory_flush_done"   // Automatic memory flush completed
 	RealtimeEventMemoryFlushFailed RealtimeEventType = "memory_flush_failed" // Automatic memory flush failed
+	RealtimeEventModelSwitch       RealtimeEventType = "model_switch"        // Main model switched to fallback
 )
 
 // Real-time event configuration (hardcoded defaults)
@@ -58,7 +58,7 @@ const (
 type RealtimeEvent struct {
 	Type      RealtimeEventType // Event type
 	Message   string            // Human-readable message
-	Count     int               // Tool count (for progress) or error count (for error guard)
+	Count     int               // Tool count (for progress)
 	LastTool  string            // Name of the most recent tool
 	Timestamp time.Time         // When the event occurred
 	SessionID string            // Optional session identifier
@@ -357,6 +357,14 @@ type Options struct {
 	// AutoCompact enables automatic context compaction for long sessions.
 	AutoCompact CompactConfig
 
+	// PrimaryFallbackModels defines model IDs used as fallbacks for the main
+	// agent generation path. Order matters and mirrors openclaw-style fallback
+	// chains: primary -> fallback[0] -> fallback[1] ...
+	PrimaryFallbackModels []string
+	// PrimaryModelName is the configured primary model ID for the main agent.
+	// It is used for runtime context tags and fallback switch event messages.
+	PrimaryModelName string
+
 	// OTEL configures OpenTelemetry distributed tracing.
 	// Requires build tag 'otel' for actual instrumentation; otherwise no-op.
 	OTEL OTELConfig
@@ -542,6 +550,23 @@ func (o Options) withDefaults() Options {
 	if o.MaxSessions <= 0 {
 		o.MaxSessions = defaultMaxSessions
 	}
+	if len(o.PrimaryFallbackModels) > 0 {
+		seen := make(map[string]struct{}, len(o.PrimaryFallbackModels))
+		normalized := make([]string, 0, len(o.PrimaryFallbackModels))
+		for _, candidate := range o.PrimaryFallbackModels {
+			trimmed := strings.TrimSpace(candidate)
+			if trimmed == "" {
+				continue
+			}
+			if _, exists := seen[trimmed]; exists {
+				continue
+			}
+			seen[trimmed] = struct{}{}
+			normalized = append(normalized, trimmed)
+		}
+		o.PrimaryFallbackModels = normalized
+	}
+	o.PrimaryModelName = strings.TrimSpace(o.PrimaryModelName)
 	return o
 }
 
@@ -620,6 +645,9 @@ func (o Options) frozen() Options {
 	}
 	if len(o.SubagentModelMapping) > 0 {
 		o.SubagentModelMapping = maps.Clone(o.SubagentModelMapping)
+	}
+	if len(o.PrimaryFallbackModels) > 0 {
+		o.PrimaryFallbackModels = append([]string(nil), o.PrimaryFallbackModels...)
 	}
 
 	return o

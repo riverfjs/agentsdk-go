@@ -59,19 +59,19 @@ func streamEmitFromContext(ctx context.Context) streamEmitFunc {
 
 // Runtime exposes the unified SDK surface that powers CLI/CI/enterprise entrypoints.
 type Runtime struct {
-	opts        Options
-	mode        ModeContext
+	opts Options
+	mode ModeContext
 	// guardBaseSystemPrompt keeps the original caller-provided system prompt
 	// (for aevitas: AGENTS.md + SOUL.md) before runtime context injections.
 	guardBaseSystemPrompt string
-	settings    *config.Settings
-	cfg         *config.Settings
-	fs          *config.FS
-	rulesLoader *config.RulesLoader
-	sandbox     *sandbox.Manager
-	sbRoot      string
-	registry    *tool.Registry
-	executor    *tool.Executor
+	settings              *config.Settings
+	cfg                   *config.Settings
+	fs                    *config.FS
+	rulesLoader           *config.RulesLoader
+	sandbox               *sandbox.Manager
+	sbRoot                string
+	registry              *tool.Registry
+	executor              *tool.Executor
 	// recorder is retained for backward compatibility.
 	// Deprecated: hook events are now recorded per-request via preparedRun.recorder.
 	recorder         HookRecorder
@@ -80,17 +80,18 @@ type Runtime struct {
 	historyPersister *diskHistoryPersister
 	sessionGate      *sessionGate
 
-	cmdExec          *commands.Executor
-	skReg            *skills.Registry
-	subMgr           *subagents.Manager
-	tokens           *tokenTracker
-	compactor        *compactor
-	tracer           Tracer
-	logger           logger.Logger
+	cmdExec   *commands.Executor
+	skReg     *skills.Registry
+	subMgr    *subagents.Manager
+	tokens    *tokenTracker
+	compactor *compactor
+	tracer    Tracer
+	logger    logger.Logger
 
 	// per-session memory flush / compaction tracking
 	sessionCompactionCount      sync.Map // sessionID -> int64
 	sessionMemoryFlushAtCompact sync.Map // sessionID -> int64
+	sessionCurrentModel         sync.Map // sessionID -> string
 
 	mu sync.RWMutex
 
@@ -177,7 +178,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 
 	recorder := defaultHookRecorder()
 	hooks := newHookExecutor(opts, recorder, settings)
-	compactor := newCompactor(opts.ProjectRoot, opts.AutoCompact, opts.Model, opts.TokenLimit, hooks, log)
+	compactor := newCompactor(opts.ProjectRoot, opts.AutoCompact, opts.Model, opts.TokenLimit, opts.PrimaryFallbackModels, hooks, log)
 
 	// Initialize tracer (noop without 'otel' build tag)
 	tracer, err := NewTracer(opts.OTEL)
@@ -303,15 +304,13 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	defer rt.persistHistory(prep.normalized.SessionID, prep.history)
 
-	// Run memory flush turn if approaching context window limit.
-	if rt.shouldMemoryFlush(prep.normalized.SessionID, prep.history, prep.preCompactTokens) {
-		rt.runMemoryFlushTurn(ctx, prep)
-	}
-
 	result, err := rt.runAgent(prep)
 	if err != nil {
 		rt.logger.Errorf("[agentsdk] Agent failed: %v", err)
 		return nil, err
+	}
+	if modelID := strings.TrimSpace(result.model); modelID != "" {
+		rt.sessionCurrentModel.Store(prep.normalized.SessionID, modelID)
 	}
 
 	outputLen := 0
@@ -452,6 +451,9 @@ func (rt *Runtime) RunStream(ctx context.Context, req Request) (<-chan StreamEve
 			isErr := true
 			out <- StreamEvent{Type: EventError, Output: runErr.Error(), IsError: &isErr}
 			return
+		}
+		if modelID := strings.TrimSpace(result.model); modelID != "" {
+			rt.sessionCurrentModel.Store(prep.normalized.SessionID, modelID)
 		}
 		if result.usage.TotalTokens > 0 || result.usage.InputTokens > 0 || result.usage.OutputTokens > 0 {
 			rt.logger.Infof("[agentsdk] Token usage: in=%d out=%d total=%d cache_create=%d cache_read=%d",
@@ -670,6 +672,7 @@ type runResult struct {
 	output *agent.ModelOutput
 	usage  model.Usage
 	reason string
+	model  string
 }
 
 func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error) {
@@ -831,8 +834,12 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 		}
 	}
 
+	currentModel := rt.currentModelForSession(normalized.SessionID)
+	if currentModel == "" {
+		currentModel = strings.TrimSpace(rt.opts.PrimaryModelName)
+	}
 	systemPrompt := strings.TrimSpace(rt.opts.SystemPrompt)
-	if contextSnippet := buildSystemContextSnippet(rt.opts.ProjectRoot, time.Now()); contextSnippet != "" {
+	if contextSnippet := buildSystemContextSnippet(rt.opts.ProjectRoot, time.Now(), currentModel); contextSnippet != "" {
 		if systemPrompt == "" {
 			systemPrompt = contextSnippet
 		} else {
@@ -845,7 +852,7 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 	if guardPrompt == "" {
 		guardPrompt = strings.TrimSpace(rt.opts.SystemPrompt)
 	}
-	return preparedRun{
+	prep := preparedRun{
 		ctx:              ctx,
 		prompt:           prompt,
 		systemPrompt:     systemPrompt,
@@ -860,7 +867,12 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 		mode:             normalized.Mode,
 		toolWhitelist:    whitelist,
 		attachments:      msgAttachments,
-	}, nil
+	}
+	// Keep memory flush in prepare so Run/RunStream share one trigger path.
+	if rt.shouldMemoryFlush(prep.normalized.SessionID, prep.history, estimateHistoryTokens(prep.history)) {
+		rt.runMemoryFlushTurn(ctx, prep)
+	}
+	return prep, nil
 }
 
 func (rt *Runtime) runAgent(prep preparedRun) (runResult, error) {
@@ -901,8 +913,40 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		realtimeCallback: rt.opts.RealtimeEventCallback,
 		progressInterval: rt.opts.ProgressInterval,
 	}
+	baseModel := model.WrapWithFallbackWithOptions(selectedModel, rt.opts.PrimaryFallbackModels, model.FallbackOptions{
+		PrimaryModel: rt.opts.PrimaryModelName,
+		OnSwitch: func(evt model.FallbackSwitchEvent) {
+			if rt.opts.RealtimeEventCallback == nil {
+				return
+			}
+			from := strings.TrimSpace(evt.FromModel)
+			to := strings.TrimSpace(evt.ToModel)
+			msg := "Model switched to fallback"
+			switch {
+			case from != "" && to != "":
+				msg = fmt.Sprintf("Model fallback switch: %s -> %s", from, to)
+			case to != "":
+				msg = fmt.Sprintf("Model fallback switch: -> %s", to)
+			}
+			metadata := map[string]any{
+				"from_model": from,
+				"to_model":   to,
+				"stream":     evt.Stream,
+			}
+			if evt.LastError != nil {
+				metadata["last_error"] = evt.LastError.Error()
+			}
+			rt.opts.RealtimeEventCallback(RealtimeEvent{
+				Type:      RealtimeEventModelSwitch,
+				Message:   msg,
+				SessionID: prep.normalized.SessionID,
+				Timestamp: time.Now(),
+				Metadata:  metadata,
+			})
+		},
+	})
 	modelAdapter := &conversationModel{
-		base:               selectedModel,
+		base:               baseModel,
 		history:            prep.history,
 		prompt:             prep.prompt,
 		trimmer:            rt.newTrimmer(),
@@ -1006,7 +1050,12 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 			})
 		}
 	}
-	return runResult{output: out, usage: modelAdapter.usage, reason: modelAdapter.stopReason}, nil
+	return runResult{
+		output: out,
+		usage:  modelAdapter.usage,
+		reason: modelAdapter.stopReason,
+		model:  strings.TrimSpace(modelAdapter.actualModel),
+	}, nil
 }
 
 func (rt *Runtime) buildResponse(prep preparedRun, result runResult) *Response {
@@ -1491,6 +1540,22 @@ func (rt *Runtime) sessionMemoryFlushAtCompaction(sessionID string) (int64, bool
 	return n, true
 }
 
+func (rt *Runtime) currentModelForSession(sessionID string) string {
+	if rt == nil {
+		return ""
+	}
+	key := strings.TrimSpace(sessionID)
+	if key == "" {
+		return ""
+	}
+	if v, ok := rt.sessionCurrentModel.Load(key); ok {
+		if s, ok := v.(string); ok {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
+}
+
 // ----------------- adapters -----------------
 
 type conversationModel struct {
@@ -1513,6 +1578,7 @@ type conversationModel struct {
 	attachments        []model.MessageAttachment // Images for vision API
 	outputGuardEnabled bool
 	requestID          string
+	actualModel        string
 }
 
 func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*agent.ModelOutput, error) {
@@ -1606,6 +1672,9 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 	}); err != nil {
 		return nil, err
 	}
+	if used := usedModelFromBase(m.base); used != "" {
+		m.actualModel = used
+	}
 	if textBlockStarted && emit != nil {
 		idx := textBlockIndex
 		emit(ctx, StreamEvent{Type: EventContentBlockStop, Index: &idx})
@@ -1643,12 +1712,15 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 		if guardPrompt == "" {
 			guardPrompt = m.systemPrompt
 		}
-		if redacted, blocked, reason := redactAssistantDisclosure(assistant.Content, guardPrompt); blocked {
+		redacted, blocked, reason, signal := redactAssistantDisclosure(assistant.Content, guardPrompt)
+		if blocked {
 			if m.logger != nil {
 				m.logger.Warnf("[agentsdk] output_guard_redacted: session=%s request=%s reason=%s output=%q", m.sessionID, strings.TrimSpace(m.requestID), reason, originalContent)
 			}
 			assistant.Content = redacted
 			assistant.ToolCalls = nil
+		} else if signal != "" && m.logger != nil {
+			m.logger.Warnf("[agentsdk] output_guard_signal: session=%s request=%s signal=%s output=%q", m.sessionID, strings.TrimSpace(m.requestID), signal, originalContent)
 		}
 	}
 	// Fix null/empty tool_use.input BEFORE appending to history.
@@ -2410,6 +2482,20 @@ func loadImageAsBase64(filePath, mimeType string) (string, string, error) {
 	return encoded, mimeType, nil
 }
 
+type lastUsedModelReader interface {
+	LastUsedModel() string
+}
+
+func usedModelFromBase(base model.Model) string {
+	if base == nil {
+		return ""
+	}
+	if reader, ok := base.(lastUsedModelReader); ok {
+		return strings.TrimSpace(reader.LastUsedModel())
+	}
+	return ""
+}
+
 // buildSkillsSnippet returns structured available-skills metadata used for
 // context reporting. It delegates to toolbuiltin.ScanSkillsList so frontmatter
 // parsing is not duplicated.
@@ -2441,9 +2527,12 @@ func buildSkillsSnippet(projectRoot string) string {
 	return b.String()
 }
 
-func buildSystemContextSnippet(projectRoot string, now time.Time) string {
+func buildSystemContextSnippet(projectRoot string, now time.Time, primaryModel string) string {
 	var sections []string
 	sections = append(sections, "<current_time>"+escapePromptTagValue(now.Format("2006-01-02 15:04 MST"))+"</current_time>")
+	if modelID := strings.TrimSpace(primaryModel); modelID != "" {
+		sections = append(sections, "<current_model>"+escapePromptTagValue(modelID)+"</current_model>")
+	}
 	if skillsSnippet := buildSkillsSnippet(projectRoot); skillsSnippet != "" {
 		sections = append(sections, skillsSnippet)
 	}

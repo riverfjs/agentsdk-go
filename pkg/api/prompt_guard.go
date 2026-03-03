@@ -2,12 +2,32 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"unicode"
 )
 
 const (
 	defaultPolicyRefusalMessage = "Sorry, I can't process that request."
+)
+
+var (
+	promptDisclosureTargetTerms = []string{
+		"system prompt", "system message", "developer prompt", "developer message",
+		"hidden instruction", "hidden prompt", "internal policy",
+		"message systeme", "message système", "invite systeme", "invite système",
+		"系统提示词", "系统提示", "系统消息", "开发者提示词", "开发者消息", "隐藏指令", "内部规则",
+		"agents.md", "soul.md",
+	}
+	promptDisclosureActionTerms = []string{
+		"reveal", "show", "print", "dump", "expose", "verbatim", "exact", "full text",
+		"translate", "summarize", "repeat", "send me",
+		"traduire", "résumer", "envoyer",
+		"透露", "展示", "输出", "复述", "翻译", "发送给我", "原文", "逐字", "完整内容",
+	}
+	promptDisclosureStructuralTerms = []string{
+		"<system>", "</system>", "## core truths", "begin system", "developer message:",
+	}
 )
 
 // ErrPromptPolicyViolation is the sentinel error for prompt-policy blocks.
@@ -33,43 +53,35 @@ func detectPromptDisclosureRequest(prompt string) bool {
 	if text == "" {
 		return false
 	}
-	targetTerms := []string{
-		"system prompt", "system message", "developer prompt", "developer message",
-		"hidden instruction", "hidden prompt", "internal policy",
-		"message systeme", "message système", "invite systeme", "invite système",
-		"系统提示词", "系统提示", "系统消息", "开发者提示词", "开发者消息", "隐藏指令", "内部规则",
-		"agents.md", "soul.md",
-	}
-	actionTerms := []string{
-		"reveal", "show", "print", "dump", "expose", "verbatim", "exact", "full text",
-		"translate", "summarize", "repeat", "send me",
-		"traduire", "résumer", "envoyer",
-		"透露", "展示", "输出", "复述", "翻译", "发送给我", "原文", "逐字", "完整内容",
-	}
-	if containsAny(text, targetTerms) && containsAny(text, actionTerms) {
+	if containsAny(text, promptDisclosureTargetTerms) && containsAny(text, promptDisclosureActionTerms) {
 		return true
 	}
-	if strings.Contains(text, "ignore previous instructions") && containsAny(text, targetTerms) {
+	if strings.Contains(text, "ignore previous instructions") && containsAny(text, promptDisclosureTargetTerms) {
 		return true
 	}
 	return false
 }
 
-func redactAssistantDisclosure(output, systemPrompt string) (string, bool, string) {
+func redactAssistantDisclosure(output, systemPrompt string) (string, bool, string, string) {
 	cleanOutput := strings.TrimSpace(output)
 	if cleanOutput == "" {
-		return output, false, ""
+		return output, false, "", ""
 	}
 	if strings.TrimSpace(systemPrompt) == "" {
-		return output, false, ""
+		return output, false, "", ""
 	}
 	if hasSystemPromptLineOverlap(cleanOutput, systemPrompt) {
-		return defaultPolicyRefusalMessage, true, "line_overlap"
+		return defaultPolicyRefusalMessage, true, "line_overlap", ""
 	}
-	if hasPromptFingerprintLeak(cleanOutput, systemPrompt) {
-		return defaultPolicyRefusalMessage, true, "fingerprint"
+	if matched, overlap, ratio := hasPromptFingerprintLeak(cleanOutput, systemPrompt); matched {
+		if semantic, signals := hasDisclosureSemanticTrigger(cleanOutput); semantic {
+			reason := fmt.Sprintf("fingerprint+semantic overlap=%d ratio=%.3f signals=%s", overlap, ratio, strings.Join(signals, ","))
+			return defaultPolicyRefusalMessage, true, reason, ""
+		}
+		signal := fmt.Sprintf("fingerprint_only overlap=%d ratio=%.3f", overlap, ratio)
+		return output, false, "", signal
 	}
-	return output, false, ""
+	return output, false, "", ""
 }
 
 func hasSystemPromptLineOverlap(output, systemPrompt string) bool {
@@ -85,17 +97,19 @@ func hasSystemPromptLineOverlap(output, systemPrompt string) bool {
 	return false
 }
 
-func hasPromptFingerprintLeak(output, systemPrompt string) bool {
+func hasPromptFingerprintLeak(output, systemPrompt string) (bool, int, float64) {
 	outNorm := normalizeForFingerprint(output)
 	sysNorm := normalizeForFingerprint(systemPrompt)
-	if len(outNorm) < 40 || len(sysNorm) < 80 {
-		return false
+	// Fingerprint matching is for substantial overlap detection.
+	// Keep short assistant answers from being over-blocked by incidental wording.
+	if len(outNorm) < 120 || len(sysNorm) < 120 {
+		return false, 0, 0
 	}
 	const n = 10
 	outGrams := charNgrams(outNorm, n)
 	sysGrams := charNgrams(sysNorm, n)
 	if len(outGrams) == 0 || len(sysGrams) == 0 {
-		return false
+		return false, 0, 0
 	}
 	overlap := 0
 	for gram := range outGrams {
@@ -104,7 +118,29 @@ func hasPromptFingerprintLeak(output, systemPrompt string) bool {
 		}
 	}
 	ratio := float64(overlap) / float64(min(len(outGrams), len(sysGrams)))
-	return overlap >= 12 && ratio >= 0.12
+	return overlap >= 24 && ratio >= 0.18, overlap, ratio
+}
+
+func hasDisclosureSemanticTrigger(output string) (bool, []string) {
+	text := strings.ToLower(strings.TrimSpace(output))
+	if text == "" {
+		return false, nil
+	}
+	var hits []string
+	appendHit := func(prefix string, terms []string) {
+		for _, term := range terms {
+			if term != "" && strings.Contains(text, term) {
+				hits = append(hits, prefix+":"+term)
+			}
+		}
+	}
+	appendHit("target", promptDisclosureTargetTerms)
+	appendHit("action", promptDisclosureActionTerms)
+	appendHit("struct", promptDisclosureStructuralTerms)
+	if len(hits) == 0 {
+		return false, nil
+	}
+	return true, hits
 }
 
 func normalizeForFingerprint(s string) string {

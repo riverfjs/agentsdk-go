@@ -63,7 +63,7 @@ func TestCompactor_CompactFlow(t *testing.T) {
 	hist.Append(msgWithTokens("assistant", 20))
 
 	mdl := &summaryModel{content: "summary"}
-	comp := newCompactor("", CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1}, mdl, 10, nil, logger.NewDefault())
+	comp := newCompactor("", CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1}, mdl, 10, nil, nil, logger.NewDefault())
 	res, ok, err := comp.maybeCompact(context.Background(), hist, "sess", nil)
 	if err != nil || !ok || res.summary == "" {
 		t.Fatalf("unexpected result ok=%v err=%v res=%+v", ok, err, res)
@@ -89,7 +89,7 @@ func TestCompactor_HookDenySkips(t *testing.T) {
 	exec := corehooks.NewExecutor()
 	exec.Register(corehooks.ShellHook{Event: coreevents.PreCompact, Command: `printf '{"continue":false}'`})
 
-	comp := newCompactor("", CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1}, &summaryModel{content: "x"}, 10, exec, logger.NewDefault())
+	comp := newCompactor("", CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1}, &summaryModel{content: "x"}, 10, nil, exec, logger.NewDefault())
 	_, ok, err := comp.maybeCompact(context.Background(), hist, "sess", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -106,7 +106,7 @@ func TestCompactor_PersistsRolloutEvent(t *testing.T) {
 	hist.Append(msgWithTokens("assistant", 20))
 	hist.Append(msgWithTokens("user", 20))
 
-	comp := newCompactor(root, CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1, RolloutDir: "rollout"}, &summaryModel{content: "sum"}, 10, nil, logger.NewDefault())
+	comp := newCompactor(root, CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1, RolloutDir: "rollout"}, &summaryModel{content: "sum"}, 10, nil, nil, logger.NewDefault())
 	_, ok, err := comp.maybeCompact(context.Background(), hist, "sess", nil)
 	if err != nil || !ok {
 		t.Fatalf("expected compaction, ok=%v err=%v", ok, err)
@@ -121,13 +121,13 @@ func TestCompactor_PersistsRolloutEvent(t *testing.T) {
 	}
 }
 
-func TestCompactor_RetryWithFallbackModel(t *testing.T) {
+func TestCompactor_RetryUsesPrimaryFallbackChain(t *testing.T) {
 	mdl := &summaryModel{
 		content: "ok",
 		errs:    []error{errors.New("boom"), nil},
 	}
-	cfg := CompactConfig{Enabled: true, MaxRetries: 1, RetryDelay: 0, FallbackModel: "fallback"}
-	comp := &compactor{cfg: cfg.withDefaults(), model: mdl, limit: 100}
+	cfg := CompactConfig{Enabled: true, MaxRetries: 1, RetryDelay: 0}
+	comp := &compactor{cfg: cfg.withDefaults(), model: mdl, limit: 100, fallbacks: []string{"fallback"}}
 	req := model.Request{Model: "primary", Messages: []model.Message{{Role: "user", Content: "hi"}}}
 	if _, err := comp.completeSummary(context.Background(), req); err != nil {
 		t.Fatalf("expected retry success, got %v", err)
@@ -262,7 +262,7 @@ func TestCompactor_HookAskSkips(t *testing.T) {
 	exec := corehooks.NewExecutor()
 	exec.Register(corehooks.ShellHook{Event: coreevents.PreCompact, Command: `printf '{"continue":false}'`})
 
-	comp := newCompactor("", CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1}, &summaryModel{content: "x"}, 10, exec, logger.NewDefault())
+	comp := newCompactor("", CompactConfig{Enabled: true, Threshold: 0.1, PreserveCount: 1}, &summaryModel{content: "x"}, 10, nil, exec, logger.NewDefault())
 	_, ok, err := comp.maybeCompact(context.Background(), hist, "sess", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

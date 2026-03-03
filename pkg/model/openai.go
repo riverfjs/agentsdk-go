@@ -45,9 +45,8 @@ type openaiModel struct {
 }
 
 const (
-	defaultOpenAIModel      = "gpt-4o"
 	defaultOpenAIMaxTokens  = 4096
-	defaultOpenAIMaxRetries = 10
+	defaultOpenAIMaxRetries = 1
 )
 
 // NewOpenAI constructs a production-ready OpenAI-backed Model.
@@ -79,7 +78,7 @@ func NewOpenAI(cfg OpenAIConfig) (Model, error) {
 
 	modelName := strings.TrimSpace(cfg.Model)
 	if modelName == "" {
-		modelName = defaultOpenAIModel
+		return nil, errors.New("openai: model required")
 	}
 
 	return &openaiModel{
@@ -316,6 +315,10 @@ func (m *openaiModel) doWithRetry(ctx context.Context, fn func(context.Context) 
 
 func isOpenAIRetryable(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	if strings.Contains(lower, "distributor") || strings.Contains(lower, "无可用渠道") {
 		return false
 	}
 	var apiErr *openai.Error

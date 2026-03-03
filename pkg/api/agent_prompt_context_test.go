@@ -11,9 +11,12 @@ import (
 func TestBuildSystemContextSnippetBasicFields(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 3, 2, 12, 30, 0, 0, time.FixedZone("HKT", 8*3600))
-	got := buildSystemContextSnippet("", now)
+	got := buildSystemContextSnippet("", now, "")
 	if !strings.Contains(got, "<current_time>2026-03-02 12:30 HKT</current_time>") {
 		t.Fatalf("missing current_time tag: %q", got)
+	}
+	if strings.Contains(got, "<current_model>") {
+		t.Fatalf("should not include current_model when unset: %q", got)
 	}
 }
 
@@ -28,7 +31,7 @@ func TestBuildSystemContextSnippetIncludesSkills(t *testing.T) {
 		t.Fatalf("write skill: %v", err)
 	}
 
-	got := buildSystemContextSnippet(root, time.Date(2026, 3, 2, 12, 31, 0, 0, time.UTC))
+	got := buildSystemContextSnippet(root, time.Date(2026, 3, 2, 12, 31, 0, 0, time.UTC), "")
 	if !strings.Contains(got, "<available_skills>") {
 		t.Fatalf("missing available_skills tag: %q", got)
 	}
@@ -57,6 +60,15 @@ func TestBuildSkillsSnippetReturnsStructuredTags(t *testing.T) {
 	got := buildSkillsSnippet(root)
 	if !strings.Contains(got, "<available_skills>") || !strings.Contains(got, "<skill>") {
 		t.Fatalf("expected structured skills tags, got %q", got)
+	}
+}
+
+func TestBuildSystemContextSnippetIncludesPrimaryModel(t *testing.T) {
+	t.Parallel()
+	got := buildSystemContextSnippet("", time.Date(2026, 3, 2, 12, 31, 0, 0, time.UTC), "anthropic/claude-opus-4.6")
+	want := "<current_model>anthropic/claude-opus-4.6</current_model>"
+	if !strings.Contains(got, want) {
+		t.Fatalf("missing current_model tag: %q", got)
 	}
 }
 

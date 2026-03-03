@@ -29,7 +29,6 @@ const (
 	MCPToolsChanged    EventType = "MCPToolsChanged"
 	FileAttachment     EventType = "FileAttachment"     // Emitted when tool produces file attachments (screenshots, etc.)
 	ProgressUpdate     EventType = "ProgressUpdate"     // Emitted for progress updates during long-running tasks
-	ErrorGuardWarning  EventType = "ErrorGuardWarning"  // Emitted when consecutive tool errors are detected
 )
 
 // Event represents a single occurrence in the system. It is intentionally
@@ -228,10 +227,3 @@ type ProgressUpdatePayload struct {
 	LastTool  string // Name of the most recent tool executed
 }
 
-// ErrorGuardWarningPayload is emitted when consecutive tool errors are detected.
-type ErrorGuardWarningPayload struct {
-	Message       string   // Warning message to display to user
-	ErrorCount    int      // Number of consecutive errors detected
-	FailedTools   []string // Names of tools that failed
-	LastError     string   // The most recent error message
-}

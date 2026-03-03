@@ -242,3 +242,4 @@ func TestConversationModelGenerateAccumulatesUsageAcrossTurns(t *testing.T) {
 		t.Fatalf("unexpected aggregated usage: %+v", conv.usage)
 	}
 }
+

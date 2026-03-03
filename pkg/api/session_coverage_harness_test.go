@@ -49,7 +49,7 @@ func TestSessionCoverageHarness(t *testing.T) {
 		{"TestCompactor_CompactFlow", TestCompactor_CompactFlow},
 		{"TestCompactor_HookDenySkips", TestCompactor_HookDenySkips},
 		{"TestCompactor_PersistsRolloutEvent", TestCompactor_PersistsRolloutEvent},
-		{"TestCompactor_RetryWithFallbackModel", TestCompactor_RetryWithFallbackModel},
+		{"TestCompactor_RetryUsesPrimaryFallbackChain", TestCompactor_RetryUsesPrimaryFallbackChain},
 		{"TestCompactor_ShouldCompactThreshold", TestCompactor_ShouldCompactThreshold},
 		{"TestCompactor_SmartPreserveInitialAndUserText", TestCompactor_SmartPreserveInitialAndUserText},
 		{"TestConcurrentExecution", TestConcurrentExecution},

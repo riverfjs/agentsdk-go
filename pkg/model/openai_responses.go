@@ -58,7 +58,7 @@ func NewOpenAIResponses(cfg OpenAIConfig) (Model, error) {
 
 	modelName := strings.TrimSpace(cfg.Model)
 	if modelName == "" {
-		modelName = defaultOpenAIModel
+		return nil, errors.New("openai: model required")
 	}
 
 	return &openaiResponsesModel{
