@@ -1,0 +1,166 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"time"
+
+	coreevents "github.com/riverfjs/agentsdk-go/pkg/core/events"
+	"github.com/riverfjs/agentsdk-go/pkg/voice"
+	"github.com/riverfjs/agentsdk-go/pkg/voice/asr"
+	"github.com/riverfjs/agentsdk-go/pkg/voice/tts"
+)
+
+func (rt *Runtime) asrProvider() voice.ASRProvider {
+	if rt == nil || !rt.opts.Voice.Enabled || !rt.opts.Voice.ASR.Enabled {
+		return nil
+	}
+	provider := strings.ToLower(strings.TrimSpace(rt.opts.Voice.ASR.Provider))
+	if provider == "" {
+		provider = "assemblyai"
+	}
+	switch provider {
+	case "assemblyai":
+		return &asr.AssemblyAI{
+			Config: voice.ASRConfig{
+				Provider:          provider,
+				APIKey:            strings.TrimSpace(rt.opts.Voice.ASR.APIKey),
+				BaseURL:           strings.TrimSpace(rt.opts.Voice.ASR.BaseURL),
+				SpeechModels:      append([]string(nil), rt.opts.Voice.ASR.SpeechModels...),
+				LanguageDetection: rt.opts.Voice.ASR.LanguageDetection,
+				PollIntervalSec:   rt.opts.Voice.ASR.PollIntervalSec,
+				TimeoutSec:        rt.opts.Voice.ASR.TimeoutSec,
+			},
+		}
+	default:
+		rt.logger.Warnf("[agentsdk] unsupported ASR provider: %s", provider)
+		return nil
+	}
+}
+
+func (rt *Runtime) ttsProvider() voice.TTSProvider {
+	if rt == nil || !rt.opts.Voice.Enabled || !rt.opts.Voice.TTS.Enabled {
+		return nil
+	}
+	provider := strings.ToLower(strings.TrimSpace(rt.opts.Voice.TTS.Provider))
+	if provider == "" {
+		provider = "edge"
+	}
+	switch provider {
+	case "edge":
+		outputDir := strings.TrimSpace(rt.opts.Voice.TTS.OutputDir)
+		if outputDir == "" {
+			root := strings.TrimSpace(rt.opts.ProjectRoot)
+			if root == "" {
+				root = "."
+			}
+			outputDir = filepath.Join(root, ".claude", "voice", "tts")
+		}
+		return &tts.Edge{
+			Config: voice.TTSConfig{
+				Provider:   provider,
+				Voice:      strings.TrimSpace(rt.opts.Voice.TTS.Voice),
+				Rate:       strings.TrimSpace(rt.opts.Voice.TTS.Rate),
+				Volume:     strings.TrimSpace(rt.opts.Voice.TTS.Volume),
+				Pitch:      strings.TrimSpace(rt.opts.Voice.TTS.Pitch),
+				OutputDir:  outputDir,
+				TimeoutSec: rt.opts.Voice.TTS.TimeoutSec,
+			},
+		}
+	default:
+		rt.logger.Warnf("[agentsdk] unsupported TTS provider: %s", provider)
+		return nil
+	}
+}
+
+func (rt *Runtime) transcribeAudioAttachment(ctx context.Context, prep preparedRun, filePath, mimeType string) (string, error) {
+	provider := rt.asrProvider()
+	if provider == nil {
+		return "", nil
+	}
+	startedAt := time.Now()
+	result, err := provider.Transcribe(ctx, voice.ASRRequest{
+		FilePath:  filePath,
+		MimeType:  mimeType,
+		SessionID: prep.normalized.SessionID,
+		RequestID: prep.normalized.RequestID,
+	})
+	if err != nil {
+		rt.logger.Warnf("[agentsdk] voice_asr_summary: session=%s request=%s file=%s status=failed elapsed_ms=%d err=%v",
+			prep.normalized.SessionID, prep.normalized.RequestID, filePath, time.Since(startedAt).Milliseconds(), err)
+		return "", err
+	}
+	text := strings.TrimSpace(result.Text)
+	rt.logger.Infof("[agentsdk] voice_asr_summary: session=%s request=%s file=%s status=ok elapsed_ms=%d text_chars=%d",
+		prep.normalized.SessionID, prep.normalized.RequestID, filePath, time.Since(startedAt).Milliseconds(), len(text))
+	return text, nil
+}
+
+func mergeVoiceTranscripts(prompt string, transcripts []string) string {
+	trimmedPrompt := strings.TrimSpace(prompt)
+	cleaned := make([]string, 0, len(transcripts))
+	for _, t := range transcripts {
+		if s := strings.TrimSpace(t); s != "" {
+			cleaned = append(cleaned, s)
+		}
+	}
+	if len(cleaned) == 0 {
+		return trimmedPrompt
+	}
+	var b strings.Builder
+	if trimmedPrompt != "" {
+		b.WriteString(trimmedPrompt)
+		b.WriteString("\n\n")
+	}
+	if len(cleaned) == 1 {
+		b.WriteString("[Voice transcript]\n")
+		b.WriteString(cleaned[0])
+		return b.String()
+	}
+	b.WriteString("[Voice transcripts]\n")
+	for i, t := range cleaned {
+		b.WriteString(fmt.Sprintf("%d) %s\n", i+1, t))
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func (rt *Runtime) appendTTSAudioEvent(ctx context.Context, prep preparedRun, resp *Response) {
+	if resp == nil || resp.Result == nil {
+		return
+	}
+	provider := rt.ttsProvider()
+	if provider == nil {
+		return
+	}
+	text := strings.TrimSpace(resp.Result.Output)
+	if text == "" {
+		return
+	}
+	result, err := provider.Synthesize(ctx, voice.TTSRequest{
+		Text:      text,
+		SessionID: prep.normalized.SessionID,
+		RequestID: prep.normalized.RequestID,
+	})
+	if err != nil {
+		rt.logger.Warnf("[agentsdk] tts synthesize failed: %v", err)
+		return
+	}
+	if strings.TrimSpace(result.FilePath) == "" {
+		return
+	}
+	resp.HookEvents = append(resp.HookEvents, coreevents.Event{
+		Type:      coreevents.FileAttachment,
+		SessionID: prep.normalized.SessionID,
+		RequestID: prep.normalized.RequestID,
+		Payload: coreevents.FileAttachmentPayload{
+			ToolName:    "voice_tts",
+			FilePath:    result.FilePath,
+			FileName:    filepath.Base(result.FilePath),
+			MimeType:    strings.TrimSpace(result.MimeType),
+			Type:        "audio",
+			Description: "Voice response generated by TTS provider",
+		},
+	})
+}

@@ -208,6 +208,39 @@ type MemoryFlushConfig struct {
 	Prompt string
 }
 
+// VoiceConfig controls optional audio pre/post processing around model turns.
+// Audio preprocess (ASR) runs before the agent turn; postprocess (TTS) runs
+// after the final text response is generated.
+type VoiceConfig struct {
+	Enabled bool
+	ASR     VoiceASRConfig
+	TTS     VoiceTTSConfig
+}
+
+// VoiceASRConfig configures speech-to-text preprocessing.
+type VoiceASRConfig struct {
+	Enabled           bool
+	Provider          string // "assemblyai"
+	APIKey            string
+	BaseURL           string
+	SpeechModels      []string
+	LanguageDetection bool
+	PollIntervalSec   int
+	TimeoutSec        int
+}
+
+// VoiceTTSConfig configures text-to-speech postprocessing.
+type VoiceTTSConfig struct {
+	Enabled    bool
+	Provider   string // "edge"
+	Voice      string // e.g. "en-US-MichelleNeural"
+	Rate       string // e.g. "+0%"
+	Volume     string // e.g. "+0%"
+	Pitch      string // e.g. "+0Hz"
+	OutputDir  string // optional absolute/relative directory for generated audio
+	TimeoutSec int
+}
+
 // Options configures the unified SDK runtime.
 type Options struct {
 	EntryPoint  EntryPoint
@@ -357,6 +390,9 @@ type Options struct {
 	// AutoCompact enables automatic context compaction for long sessions.
 	AutoCompact CompactConfig
 
+	// Voice configures optional ASR/TTS pipeline.
+	Voice VoiceConfig
+
 	// PrimaryFallbackModels defines model IDs used as fallbacks for the main
 	// agent generation path. Order matters and mirrors openclaw-style fallback
 	// chains: primary -> fallback[0] -> fallback[1] ...
@@ -400,14 +436,14 @@ type Request struct {
 	TargetSubagent    string
 	ToolWhitelist     []string
 	ForceSkills       []string
-	Attachments       []Attachment // Optional: images or files for multimodal requests
+	Attachments       []Attachment // Optional: images/audio/files for multimodal requests
 }
 
-// Attachment represents a file attachment (e.g., image) for vision API
+// Attachment represents a multimodal file attachment.
 type Attachment struct {
-	Type     string // "image" or "file"
+	Type     string // "image", "audio", or "file"
 	FilePath string // Local file path
-	MimeType string // e.g., "image/jpeg", "image/png"
+	MimeType string // e.g., "image/jpeg", "audio/wav"
 }
 
 // Response aggregates the final agent result together with metadata emitted
@@ -550,6 +586,27 @@ func (o Options) withDefaults() Options {
 	if o.MaxSessions <= 0 {
 		o.MaxSessions = defaultMaxSessions
 	}
+	if o.Voice.ASR.Provider == "" {
+		o.Voice.ASR.Provider = "assemblyai"
+	}
+	if o.Voice.ASR.BaseURL == "" {
+		o.Voice.ASR.BaseURL = "https://api.assemblyai.com"
+	}
+	if o.Voice.ASR.PollIntervalSec <= 0 {
+		o.Voice.ASR.PollIntervalSec = 3
+	}
+	if o.Voice.ASR.TimeoutSec <= 0 {
+		o.Voice.ASR.TimeoutSec = 120
+	}
+	if o.Voice.TTS.Provider == "" {
+		o.Voice.TTS.Provider = "edge"
+	}
+	if o.Voice.TTS.Voice == "" {
+		o.Voice.TTS.Voice = "en-US-MichelleNeural"
+	}
+	if o.Voice.TTS.TimeoutSec <= 0 {
+		o.Voice.TTS.TimeoutSec = 60
+	}
 	if len(o.PrimaryFallbackModels) > 0 {
 		seen := make(map[string]struct{}, len(o.PrimaryFallbackModels))
 		normalized := make([]string, 0, len(o.PrimaryFallbackModels))
@@ -648,6 +705,9 @@ func (o Options) frozen() Options {
 	}
 	if len(o.PrimaryFallbackModels) > 0 {
 		o.PrimaryFallbackModels = append([]string(nil), o.PrimaryFallbackModels...)
+	}
+	if len(o.Voice.ASR.SpeechModels) > 0 {
+		o.Voice.ASR.SpeechModels = append([]string(nil), o.Voice.ASR.SpeechModels...)
 	}
 
 	return o

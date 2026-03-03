@@ -329,7 +329,9 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (*Response, error) {
 			result.usage.CacheReadTokens,
 		)
 	}
-	return rt.buildResponse(prep, result), nil
+	resp := rt.buildResponse(prep, result)
+	rt.appendTTSAudioEvent(ctx, prep, resp)
+	return resp, nil
 }
 
 func truncatePrompt(s string, n int) string {
@@ -366,7 +368,7 @@ func (rt *Runtime) RunStream(ctx context.Context, req Request) (<-chan StreamEve
 	if rt == nil {
 		return nil, ErrRuntimeClosed
 	}
-	if strings.TrimSpace(req.Prompt) == "" {
+	if strings.TrimSpace(req.Prompt) == "" && len(req.Attachments) == 0 {
 		return nil, errors.New("api: prompt is empty")
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
@@ -465,6 +467,7 @@ func (rt *Runtime) RunStream(ctx context.Context, req Request) (<-chan StreamEve
 			)
 		}
 		resp := rt.buildResponse(prep, result)
+		rt.appendTTSAudioEvent(ctxWithEmit, prep, resp)
 		out <- StreamEvent{Type: EventFinalResponse, Output: resp}
 	}()
 	return out, nil
@@ -682,7 +685,7 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 	fallbackSession := defaultSessionID(rt.mode.EntryPoint)
 	normalized := req.normalized(rt.mode, fallbackSession)
 	prompt := strings.TrimSpace(normalized.Prompt)
-	if prompt == "" {
+	if prompt == "" && len(normalized.Attachments) == 0 {
 		return preparedRun{}, errors.New("api: prompt is empty")
 	}
 
@@ -699,27 +702,44 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 	// what the user actually said, not the enriched prompt with skill names etc.
 	rawUserPrompt := prompt
 
-	// Process attachments (convert to base64)
+	// Process attachments (convert to base64; audio can be pre-transcribed by ASR)
 	var msgAttachments []model.MessageAttachment
+	var voiceTranscripts []string
 	for _, att := range normalized.Attachments {
 		if att.FilePath == "" {
 			continue
 		}
-		data, mimeType, err := loadImageAsBase64(att.FilePath, att.MimeType)
+		attType := resolveAttachmentType(att.Type, att.MimeType, att.FilePath)
+		data, mimeType, err := loadAttachmentAsBase64(att.FilePath, att.MimeType, attType)
 		if err != nil {
 			rt.logger.Warnf("failed to load attachment %s: %v", att.FilePath, err)
 			continue
 		}
+		if attType == "audio" {
+			transcript, err := rt.transcribeAudioAttachment(ctx, preparedRun{normalized: normalized}, att.FilePath, mimeType)
+			if err != nil {
+				rt.logger.Warnf("failed to transcribe audio %s: %v", att.FilePath, err)
+			} else if transcript != "" {
+				voiceTranscripts = append(voiceTranscripts, transcript)
+				// ASR-first mode: consume audio as text.
+				continue
+			}
+			// If ASR is enabled but produced no transcript, do not forward raw audio.
+			if rt.asrProvider() != nil {
+				continue
+			}
+		}
 		msgAttachments = append(msgAttachments, model.MessageAttachment{
-			Type:       "image",
+			Type:       attType,
 			Data:       data,
 			MimeType:   mimeType,
 			SourceType: "base64",
 		})
 	}
+	prompt = mergeVoiceTranscripts(prompt, voiceTranscripts)
 
 	if len(msgAttachments) > 0 {
-		rt.logger.Debugf("loaded %d image attachment(s) for vision API", len(msgAttachments))
+		rt.logger.Debugf("loaded %d attachment(s) for multimodal API", len(msgAttachments))
 	}
 
 	history := rt.histories.Get(normalized.SessionID)
@@ -839,6 +859,9 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 		currentModel = strings.TrimSpace(rt.opts.PrimaryModelName)
 	}
 	systemPrompt := strings.TrimSpace(rt.opts.SystemPrompt)
+	if rt.opts.Voice.Enabled && rt.opts.Voice.TTS.Enabled {
+		systemPrompt = appendPlainTextForTTSRule(systemPrompt)
+	}
 	if contextSnippet := buildSystemContextSnippet(rt.opts.ProjectRoot, time.Now(), currentModel); contextSnippet != "" {
 		if systemPrompt == "" {
 			systemPrompt = contextSnippet
@@ -2454,32 +2477,29 @@ func defaultSessionID(entry EntryPoint) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 }
 
-// loadImageAsBase64 loads an image file and returns base64-encoded data
-func loadImageAsBase64(filePath, mimeType string) (string, string, error) {
+// loadAttachmentAsBase64 loads a multimodal file and returns base64-encoded data.
+func loadAttachmentAsBase64(filePath, mimeType, attachmentType string) (string, string, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return "", "", fmt.Errorf("read file: %w", err)
 	}
 
+	attachmentType = strings.ToLower(strings.TrimSpace(attachmentType))
+	if attachmentType == "" {
+		attachmentType = "image"
+	}
+
 	// Auto-detect MIME type if not provided
 	if mimeType == "" {
-		ext := strings.ToLower(filepath.Ext(filePath))
-		switch ext {
-		case ".jpg", ".jpeg":
-			mimeType = "image/jpeg"
-		case ".png":
-			mimeType = "image/png"
-		case ".gif":
-			mimeType = "image/gif"
-		case ".webp":
-			mimeType = "image/webp"
-		default:
-			mimeType = "image/jpeg"
-		}
+		mimeType = DetectAttachmentMIME(attachmentType, filePath)
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(data)
 	return encoded, mimeType, nil
+}
+
+func resolveAttachmentType(rawType, mimeType, filePath string) string {
+	return DetectAttachmentType(rawType, mimeType, filePath)
 }
 
 type lastUsedModelReader interface {
@@ -2547,4 +2567,16 @@ var promptTagEscaper = strings.NewReplacer(
 
 func escapePromptTagValue(value string) string {
 	return promptTagEscaper.Replace(strings.TrimSpace(value))
+}
+
+func appendPlainTextForTTSRule(systemPrompt string) string {
+	const rule = "Please reply in plain readable text for TTS, do not use Markdown/code blocks/tables/emoji."
+	trimmed := strings.TrimSpace(systemPrompt)
+	if strings.Contains(trimmed, rule) {
+		return trimmed
+	}
+	if trimmed == "" {
+		return rule
+	}
+	return trimmed + "\n\n" + rule
 }

@@ -89,6 +89,7 @@ func TestNewOpenAIResponses(t *testing.T) {
 			cfg: OpenAIConfig{
 				APIKey:  "sk-test",
 				BaseURL: "https://custom.api.com",
+				Model:   "gpt-4o",
 			},
 			wantErr: false,
 		},
@@ -110,6 +111,7 @@ func TestNewOpenAIResponses(t *testing.T) {
 			name: "default max tokens when zero",
 			cfg: OpenAIConfig{
 				APIKey:    "sk-test",
+				Model:     "gpt-4o",
 				MaxTokens: 0,
 			},
 			wantErr: false,
@@ -118,6 +120,7 @@ func TestNewOpenAIResponses(t *testing.T) {
 			name: "default max retries when zero",
 			cfg: OpenAIConfig{
 				APIKey:     "sk-test",
+				Model:      "gpt-4o",
 				MaxRetries: 0,
 			},
 			wantErr: false,

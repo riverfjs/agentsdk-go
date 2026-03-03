@@ -8,14 +8,14 @@ type Message struct {
 	Role        string
 	Content     string
 	ToolCalls   []ToolCall
-	Attachments []MessageAttachment // Optional: images for vision API
+	Attachments []MessageAttachment // Optional: image/audio/file attachments
 }
 
-// MessageAttachment represents an image or file attachment in a message
+// MessageAttachment represents a multimodal attachment in a message.
 type MessageAttachment struct {
-	Type       string // "image" or "file"
+	Type       string // "image", "audio", or "file"
 	Data       string // base64-encoded data
-	MimeType   string // e.g., "image/jpeg"
+	MimeType   string // e.g., "image/jpeg", "audio/wav"
 	SourceType string // "base64" or "url"
 }
 

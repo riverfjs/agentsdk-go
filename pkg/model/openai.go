@@ -314,10 +314,13 @@ func (m *openaiModel) doWithRetry(ctx context.Context, fn func(context.Context) 
 }
 
 func isOpenAIRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	lower := strings.ToLower(strings.TrimSpace(safeErrorString(err)))
 	if strings.Contains(lower, "distributor") || strings.Contains(lower, "无可用渠道") {
 		return false
 	}
@@ -335,6 +338,18 @@ func isOpenAIRetryable(err error) bool {
 		return netErr.Temporary()
 	}
 	return true
+}
+
+func safeErrorString(err error) (result string) {
+	if err == nil {
+		return ""
+	}
+	defer func() {
+		if recover() != nil {
+			result = ""
+		}
+	}()
+	return err.Error()
 }
 
 func (m *openaiModel) selectModel(override string) string {

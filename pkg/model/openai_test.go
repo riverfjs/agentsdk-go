@@ -82,6 +82,7 @@ func TestNewOpenAI(t *testing.T) {
 			cfg: OpenAIConfig{
 				APIKey:  "sk-test",
 				BaseURL: "https://custom.api.com",
+				Model:   "gpt-4o",
 			},
 			wantErr: false,
 		},
@@ -578,6 +579,7 @@ func TestOpenAIProvider(t *testing.T) {
 	t.Run("caching works with TTL", func(t *testing.T) {
 		p := &OpenAIProvider{
 			APIKey:   "sk-test",
+			ModelName: "gpt-4o",
 			CacheTTL: 1 * time.Hour,
 		}
 
@@ -595,6 +597,7 @@ func TestOpenAIProvider(t *testing.T) {
 	t.Run("no caching when TTL is 0", func(t *testing.T) {
 		p := &OpenAIProvider{
 			APIKey:   "sk-test",
+			ModelName: "gpt-4o",
 			CacheTTL: 0,
 		}
 

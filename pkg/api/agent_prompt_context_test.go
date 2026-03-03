@@ -72,3 +72,19 @@ func TestBuildSystemContextSnippetIncludesPrimaryModel(t *testing.T) {
 	}
 }
 
+func TestAppendPlainTextForTTSRule(t *testing.T) {
+	t.Parallel()
+	got := appendPlainTextForTTSRule("base prompt")
+	if !strings.Contains(got, "base prompt") {
+		t.Fatalf("missing base prompt: %q", got)
+	}
+	const rule = "Please reply in plain readable text for TTS, do not use Markdown/code blocks/tables/emoji."
+	if !strings.Contains(got, rule) {
+		t.Fatalf("missing plain text tts rule: %q", got)
+	}
+	again := appendPlainTextForTTSRule(got)
+	if strings.Count(again, rule) != 1 {
+		t.Fatalf("rule should be appended once: %q", again)
+	}
+}
+
