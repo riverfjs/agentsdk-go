@@ -95,6 +95,26 @@ func (r *Registry) List() []Tool {
 	return tools
 }
 
+// Names returns a sorted snapshot of registered tool names.
+func (r *Registry) Names() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// Has reports whether a tool with the exact name is registered.
+func (r *Registry) Has(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.tools[name]
+	return ok
+}
+
 // SetValidator swaps the validator instance used before execution.
 func (r *Registry) SetValidator(v Validator) {
 	r.mu.Lock()

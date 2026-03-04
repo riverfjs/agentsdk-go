@@ -3,6 +3,7 @@ package security
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -44,6 +45,7 @@ type PermissionMatcher struct {
 	allow []*permissionRule
 	ask   []*permissionRule
 	deny  []*permissionRule
+	def   PermissionAction
 }
 
 type permissionRule struct {
@@ -59,34 +61,50 @@ func NewPermissionMatcher(cfg *config.PermissionsConfig) (*PermissionMatcher, er
 	if cfg == nil {
 		return nil, nil
 	}
+	if len(cfg.Allow) > 0 || len(cfg.Ask) > 0 || len(cfg.Deny) > 0 {
+		return nil, errors.New("permissions.allow/ask/deny are no longer supported; use permissions.dsl")
+	}
+	if len(cfg.DSL) == 0 {
+		return nil, nil
+	}
 
-	build := func(rules []string) ([]*permissionRule, error) {
-		var compiled []*permissionRule
-		for _, rule := range rules {
-			r, err := compilePermissionRule(rule)
-			if err != nil {
-				return nil, err
-			}
-			compiled = append(compiled, r)
+	def := PermissionDeny
+	if raw := strings.ToLower(strings.TrimSpace(cfg.Default)); raw != "" {
+		switch raw {
+		case string(PermissionAllow):
+			def = PermissionAllow
+		case string(PermissionAsk):
+			def = PermissionAsk
+		case string(PermissionDeny):
+			def = PermissionDeny
+		default:
+			return nil, fmt.Errorf("unsupported permissions.default %q", cfg.Default)
 		}
-		sort.SliceStable(compiled, func(i, j int) bool { return compiled[i].raw < compiled[j].raw })
-		return compiled, nil
 	}
 
-	allow, err := build(cfg.Allow)
-	if err != nil {
-		return nil, err
+	m := &PermissionMatcher{def: def}
+	for _, line := range cfg.DSL {
+		ast, err := parseDSLRule(line)
+		if err != nil {
+			return nil, err
+		}
+		rule, err := compileDSLASTRule(ast)
+		if err != nil {
+			return nil, err
+		}
+		switch ast.Effect {
+		case PermissionAllow:
+			m.allow = append(m.allow, rule)
+		case PermissionAsk:
+			m.ask = append(m.ask, rule)
+		case PermissionDeny:
+			m.deny = append(m.deny, rule)
+		}
 	}
-	ask, err := build(cfg.Ask)
-	if err != nil {
-		return nil, err
-	}
-	deny, err := build(cfg.Deny)
-	if err != nil {
-		return nil, err
-	}
-
-	return &PermissionMatcher{allow: allow, ask: ask, deny: deny}, nil
+	sort.SliceStable(m.allow, func(i, j int) bool { return m.allow[i].raw < m.allow[j].raw })
+	sort.SliceStable(m.ask, func(i, j int) bool { return m.ask[i].raw < m.ask[j].raw })
+	sort.SliceStable(m.deny, func(i, j int) bool { return m.deny[i].raw < m.deny[j].raw })
+	return m, nil
 }
 
 // Match resolves the decision for a tool invocation. Priority: deny > ask > allow.
@@ -107,7 +125,10 @@ func (m *PermissionMatcher) Match(toolName string, params map[string]any) Permis
 	if decision, ok := m.matchRules(tool, target, m.allow, PermissionAllow); ok {
 		return decision
 	}
-	return PermissionDecision{Action: PermissionUnknown, Tool: tool, Target: target}
+	if m.def == "" {
+		return PermissionDecision{Action: PermissionUnknown, Tool: tool, Target: target}
+	}
+	return PermissionDecision{Action: m.def, Tool: tool, Target: target}
 }
 
 func (m *PermissionMatcher) matchRules(tool, target string, rules []*permissionRule, action PermissionAction) (PermissionDecision, bool) {
@@ -124,79 +145,6 @@ func (m *PermissionMatcher) matchRules(tool, target string, rules []*permissionR
 		}
 	}
 	return PermissionDecision{}, false
-}
-
-func compilePermissionRule(rule string) (*permissionRule, error) {
-	trimmed := strings.TrimSpace(rule)
-	if trimmed == "" {
-		return nil, errors.New("permission rule is empty")
-	}
-
-	// Path rule: bare glob/regex patterns containing "/" or "." match any tool target.
-	if !strings.ContainsRune(trimmed, '(') && (strings.Contains(trimmed, "/") || strings.Contains(trimmed, ".")) {
-		matcher, err := compilePattern(trimmed)
-		if err != nil {
-			return nil, fmt.Errorf("compile path rule %q: %w", rule, err)
-		}
-		return &permissionRule{
-			raw:       trimmed,
-			tool:      "*",
-			toolMatch: func(string) bool { return true },
-			match:     matcher,
-		}, nil
-	}
-
-	// Tool name rule: match tool.Name directly (exact or glob).
-	if !strings.ContainsRune(trimmed, '(') {
-		toolMatcher, err := compileToolMatcher(trimmed)
-		if err != nil {
-			return nil, fmt.Errorf("compile tool rule %q: %w", rule, err)
-		}
-		return &permissionRule{
-			raw:       trimmed,
-			tool:      trimmed,
-			toolMatch: toolMatcher,
-			match:     func(string) bool { return true },
-		}, nil
-	}
-
-	open := strings.IndexRune(trimmed, '(')
-	if !strings.HasSuffix(trimmed, ")") {
-		return nil, fmt.Errorf("permission rule %q malformed", rule)
-	}
-	tool := strings.TrimSpace(trimmed[:open])
-	pattern := strings.TrimSuffix(trimmed[open+1:], ")")
-	matcher, err := compilePattern(pattern)
-	if err != nil {
-		return nil, fmt.Errorf("compile rule %q: %w", rule, err)
-	}
-	return &permissionRule{
-		raw:       trimmed,
-		tool:      tool,
-		toolMatch: func(name string) bool { return strings.EqualFold(tool, name) },
-		match:     matcher,
-	}, nil
-}
-
-func compileToolMatcher(pattern string) (func(string) bool, error) {
-	trimmed := strings.TrimSpace(pattern)
-	if trimmed == "" {
-		return nil, errors.New("empty tool pattern")
-	}
-	// Exact match fast path.
-	if !strings.ContainsAny(trimmed, "*?") && !strings.HasPrefix(strings.ToLower(trimmed), "regex:") && !strings.HasPrefix(strings.ToLower(trimmed), "regexp:") {
-		lower := strings.ToLower(trimmed)
-		return func(name string) bool { return strings.ToLower(strings.TrimSpace(name)) == lower }, nil
-	}
-
-	// Glob or regex with case-insensitive comparison.
-	matcher, err := compilePattern(strings.ToLower(trimmed))
-	if err != nil {
-		return nil, err
-	}
-	return func(name string) bool {
-		return matcher(strings.ToLower(strings.TrimSpace(name)))
-	}, nil
 }
 
 func compilePattern(pattern string) (func(string) bool, error) {
@@ -265,6 +213,20 @@ func deriveTarget(tool string, params map[string]any) string {
 	case "taskcreate", "taskget", "taskupdate", "tasklist":
 		if id := firstString(params, "task_id", "id"); id != "" {
 			return id
+		}
+	case "webfetch":
+		u := firstString(params, "url")
+		if u == "" {
+			return ""
+		}
+		parsed, err := url.Parse(u)
+		if err != nil {
+			return strings.ToLower(strings.TrimSpace(u))
+		}
+		return strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	case "websearch":
+		if q := firstString(params, "search_term", "query"); q != "" {
+			return strings.ToLower(strings.TrimSpace(q))
 		}
 	}
 	if p := firstString(params, "path", "file", "target"); p != "" {

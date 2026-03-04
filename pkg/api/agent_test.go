@@ -111,7 +111,7 @@ func TestRuntimeToolFlow(t *testing.T) {
 }
 
 func TestRuntimePermissionAskHandlerAllows(t *testing.T) {
-	root := newClaudeProjectWithSettings(t, `{"permissions":{"ask":["echo"]},"sandbox":{"enabled":true}}`)
+	root := newClaudeProjectWithSettings(t, `{"permissions":{"default":"deny","dsl":["ask echo *"]},"sandbox":{"enabled":true}}`)
 	mdl := &stubModel{responses: []*model.Response{
 		{Message: model.Message{Role: "assistant", ToolCalls: []model.ToolCall{{ID: "1", Name: "echo", Arguments: map[string]any{"text": "hi"}}}}},
 		{Message: model.Message{Role: "assistant", Content: "done"}},
@@ -149,7 +149,7 @@ func TestRuntimePermissionAskHandlerAllows(t *testing.T) {
 }
 
 func TestRuntimePermissionAskHandlerDenies(t *testing.T) {
-	root := newClaudeProjectWithSettings(t, `{"permissions":{"ask":["echo"]},"sandbox":{"enabled":true}}`)
+	root := newClaudeProjectWithSettings(t, `{"permissions":{"default":"deny","dsl":["ask echo *"]},"sandbox":{"enabled":true}}`)
 	mdl := &stubModel{responses: []*model.Response{
 		{Message: model.Message{Role: "assistant", ToolCalls: []model.ToolCall{{ID: "1", Name: "echo", Arguments: map[string]any{"text": "hi"}}}}},
 		{Message: model.Message{Role: "assistant", Content: "done"}},
@@ -184,7 +184,7 @@ func TestRuntimePermissionAskHandlerDenies(t *testing.T) {
 }
 
 func TestRuntimePermissionAskAutoWhitelist(t *testing.T) {
-	root := newClaudeProjectWithSettings(t, `{"permissions":{"ask":["echo"]},"sandbox":{"enabled":true}}`)
+	root := newClaudeProjectWithSettings(t, `{"permissions":{"default":"deny","dsl":["ask echo *"]},"sandbox":{"enabled":true}}`)
 	mdl := &stubModel{responses: []*model.Response{
 		{Message: model.Message{Role: "assistant", ToolCalls: []model.ToolCall{{ID: "1", Name: "echo", Arguments: map[string]any{"text": "hi"}}}}},
 		{Message: model.Message{Role: "assistant", Content: "done"}},

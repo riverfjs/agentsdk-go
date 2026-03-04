@@ -456,7 +456,7 @@ func TestExecutorDeniesByPermissions(t *testing.T) {
 	if err := os.MkdirAll(claude, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	settings := `{"permissions":{"deny":["Bash(ls:*)"]}}`
+	settings := `{"permissions":{"default":"allow","dsl":["deny Bash ls"]}}`
 	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(settings), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}
@@ -483,7 +483,7 @@ func TestExecutorAsksWhenConfigured(t *testing.T) {
 	if err := os.MkdirAll(claude, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	settings := `{"permissions":{"ask":["Bash(ls:*)"]}}`
+	settings := `{"permissions":{"default":"allow","dsl":["ask Bash ls"]}}`
 	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(settings), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}
@@ -510,7 +510,7 @@ func TestExecutorApprovalResolverAllows(t *testing.T) {
 	if err := os.MkdirAll(claude, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	settings := `{"permissions":{"ask":["Bash(ls:*)"]}}`
+	settings := `{"permissions":{"default":"allow","dsl":["ask Bash ls"]}}`
 	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(settings), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}
@@ -541,7 +541,7 @@ func TestExecutorApprovalResolverDenies(t *testing.T) {
 	if err := os.MkdirAll(claude, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	settings := `{"permissions":{"ask":["Bash(ls:*)"]}}`
+	settings := `{"permissions":{"default":"allow","dsl":["ask Bash ls"]}}`
 	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(settings), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}
@@ -572,7 +572,7 @@ func TestExecutorAllowsWhenPermissionMatches(t *testing.T) {
 	if err := os.MkdirAll(claude, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	settings := `{"permissions":{"allow":["Bash(ls:*)"]}}`
+	settings := `{"permissions":{"default":"deny","dsl":["allow Bash ls"]}}`
 	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(settings), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}

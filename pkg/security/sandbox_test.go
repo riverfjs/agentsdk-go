@@ -10,7 +10,7 @@ func TestSandboxLoadPermissions(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	settings := `{"permissions":{"allow":["Bash(ls:*)"],"deny":["Read(secret)"]}}`
+	settings := `{"permissions":{"default":"deny","dsl":["allow Bash ls","deny Read secret"]}}`
 	path := filepath.Join(root, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)

@@ -62,6 +62,15 @@ func validatePermissionsConfig(p *PermissionsConfig) []error {
 	}
 	var errs []error
 
+	if len(p.Allow) > 0 || len(p.Ask) > 0 || len(p.Deny) > 0 {
+		errs = append(errs, errors.New("permissions.allow/ask/deny are no longer supported; migrate rules to permissions.dsl"))
+	}
+
+	def := strings.ToLower(strings.TrimSpace(p.Default))
+	if def != "" && def != "allow" && def != "ask" && def != "deny" {
+		errs = append(errs, fmt.Errorf("permissions.default must be one of allow|ask|deny, got %q", p.Default))
+	}
+
 	mode := strings.TrimSpace(p.DefaultMode)
 	switch mode {
 	case "askBeforeRunningTools", "acceptReadOnly", "acceptEdits", "bypassPermissions":
@@ -74,10 +83,6 @@ func validatePermissionsConfig(p *PermissionsConfig) []error {
 	if p.DisableBypassPermissionsMode != "" && p.DisableBypassPermissionsMode != "disable" {
 		errs = append(errs, fmt.Errorf("permissions.disableBypassPermissionsMode must be \"disable\", got %q", p.DisableBypassPermissionsMode))
 	}
-
-	errs = append(errs, validateRuleSlice("permissions.allow", p.Allow)...)
-	errs = append(errs, validateRuleSlice("permissions.ask", p.Ask)...)
-	errs = append(errs, validateRuleSlice("permissions.deny", p.Deny)...)
 
 	for i, dir := range p.AdditionalDirectories {
 		if strings.TrimSpace(dir) == "" {

@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	bleve "github.com/blevesearch/bleve/v2"
+	_ "github.com/blevesearch/bleve/v2/analysis/lang/cjk"
 	"github.com/riverfjs/agentsdk-go/pkg/tool"
 )
 
@@ -22,14 +23,16 @@ const (
 	memorySearchChunkSize    = 400  // target tokens per chunk (~4 chars/token estimate)
 	memorySearchChunkOverlap = 80
 	memorySearchSnippetMax   = 700  // chars returned per result
-	memorySearchDefaultMax   = 5
-	memorySearchMinScore     = 0.5  // minimum score to include a chunk (filters accidental keyword hits)
+	memorySearchDefaultMax   = 3
+	memorySearchMaxCap       = 5
 
 	memorySearchDescription = `Mandatory recall step: semantically search MEMORY.md + memory/*.md before answering questions about prior work, decisions, dates, people, preferences, or todos.
 
 Usage:
 - Call this tool BEFORE answering anything about past events, decisions, preferences, or tasks.
 - Returns top matching snippets with file path and line range.
+- Default returns top 3 results.
+- You may pass max_results to override, capped at 5.
 - Follow up with MemoryGet to read the full content of a specific location.
 - query: the search query in natural language or keywords`
 )
@@ -90,6 +93,9 @@ func (t *MemorySearchTool) Execute(ctx context.Context, params map[string]interf
 			maxResults = n
 		}
 	}
+	if maxResults > memorySearchMaxCap {
+		maxResults = memorySearchMaxCap
+	}
 
 	files, err := collectMemoryFiles(t.workspaceDir)
 	if err != nil {
@@ -107,8 +113,6 @@ func (t *MemorySearchTool) Execute(ctx context.Context, params map[string]interf
 		}, nil
 	}
 
-	tokens := tokenize(query)
-
 	var allChunks []MemoryChunk
 	for _, filePath := range files {
 		if err := ctx.Err(); err != nil {
@@ -122,23 +126,13 @@ func (t *MemorySearchTool) Execute(ctx context.Context, params map[string]interf
 		allChunks = append(allChunks, chunks...)
 	}
 
-	// Score each chunk
-	for i := range allChunks {
-		allChunks[i].Score = scoreChunk(allChunks[i].Snippet, tokens)
-	}
-
-	// Filter non-zero and sort by score descending
-	var scored []MemoryChunk
-	for _, c := range allChunks {
-		if c.Score >= memorySearchMinScore {
-			scored = append(scored, c)
-		}
-	}
-	sort.Slice(scored, func(i, j int) bool {
-		return scored[i].Score > scored[j].Score
-	})
-	if len(scored) > maxResults {
-		scored = scored[:maxResults]
+	scored, err := searchChunksWithBleve(allChunks, query, maxResults)
+	if err != nil {
+		return &tool.ToolResult{
+			Success: true,
+			Output:  fmt.Sprintf("Memory search failed: %v", err),
+			Data:    map[string]interface{}{"results": []interface{}{}, "query": query},
+		}, nil
 	}
 
 	// Clamp snippet length
@@ -249,99 +243,6 @@ func chunkFile(filePath, relPath string) ([]MemoryChunk, error) {
 
 // tokenize lowercases and splits text into word tokens, removing punctuation.
 // CJK characters are each emitted as individual tokens (no space-based segmentation).
-func tokenize(text string) []string {
-	text = strings.ToLower(text)
-	var tokens []string
-	var cur strings.Builder
-	for _, r := range text {
-		if isCJK(r) {
-			// flush current ASCII token first
-			if cur.Len() > 0 {
-				tokens = append(tokens, cur.String())
-				cur.Reset()
-			}
-			tokens = append(tokens, string(r))
-		} else if isWordChar(r) {
-			cur.WriteRune(r)
-		} else {
-			if cur.Len() > 0 {
-				tokens = append(tokens, cur.String())
-				cur.Reset()
-			}
-		}
-	}
-	if cur.Len() > 0 {
-		tokens = append(tokens, cur.String())
-	}
-	return tokens
-}
-
-func isWordChar(r rune) bool {
-	// ASCII word chars
-	if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
-		return true
-	}
-	// CJK Unified Ideographs — treat each character as its own token boundary
-	// (handled separately in tokenize via isCJK)
-	return false
-}
-
-// isCJK reports whether r is a CJK unified ideograph (basic block).
-func isCJK(r rune) bool {
-	return r >= '\u4e00' && r <= '\u9fff'
-}
-
-// scoreChunk computes a relevance score for a chunk given query tokens.
-// Uses a simple TF-IDF-inspired approach:
-//   - term frequency: how many times each token appears in the chunk
-//   - position bonus: tokens appearing early in the chunk score higher
-//   - exact phrase bonus: if multiple consecutive tokens match together
-func scoreChunk(chunk string, queryTokens []string) float64 {
-	if len(queryTokens) == 0 {
-		return 0
-	}
-	lower := strings.ToLower(chunk)
-	chunkTokens := tokenize(lower)
-	if len(chunkTokens) == 0 {
-		return 0
-	}
-
-	// Build token frequency map
-	freq := make(map[string]int, len(chunkTokens))
-	for _, t := range chunkTokens {
-		freq[t]++
-	}
-
-	totalLen := float64(len(chunkTokens))
-	score := 0.0
-	matchedCount := 0
-	for _, qt := range queryTokens {
-		if f, ok := freq[qt]; ok {
-			// TF component
-			tf := float64(f) / totalLen
-			score += math.Log(1+tf) * 10
-			matchedCount++
-		}
-	}
-	if matchedCount == 0 {
-		return 0
-	}
-
-	// Boost for matching more query terms
-	coverage := float64(matchedCount) / float64(len(queryTokens))
-	score *= (0.5 + 0.5*coverage)
-
-	// Exact phrase bonus: check if the full query appears as substring
-	if len(queryTokens) > 1 {
-		phrase := strings.Join(queryTokens, " ")
-		if strings.Contains(lower, phrase) {
-			score *= 2.0
-		}
-	}
-
-	return score
-}
-
 func toRelPath(base, full string) string {
 	rel, err := filepath.Rel(base, full)
 	if err != nil {
@@ -369,7 +270,6 @@ func SearchMemory(workspaceDir, query string, maxResults int) ([]MemoryChunk, er
 		return nil, nil
 	}
 
-	tokens := tokenize(query)
 	var allChunks []MemoryChunk
 	for _, filePath := range files {
 		relPath := toRelPath(workspaceDir, filePath)
@@ -380,26 +280,9 @@ func SearchMemory(workspaceDir, query string, maxResults int) ([]MemoryChunk, er
 		allChunks = append(allChunks, chunks...)
 	}
 
-	for i := range allChunks {
-		allChunks[i].Score = scoreChunk(allChunks[i].Snippet, tokens)
-	}
-
-	var scored []MemoryChunk
-	for _, c := range allChunks {
-		if c.Score >= memorySearchMinScore {
-			scored = append(scored, c)
-		}
-	}
-	sort.Slice(scored, func(i, j int) bool {
-		return scored[i].Score > scored[j].Score
-	})
-	if len(scored) > maxResults {
-		scored = scored[:maxResults]
-	}
-	for i := range scored {
-		if len(scored[i].Snippet) > memorySearchSnippetMax {
-			scored[i].Snippet = scored[i].Snippet[:memorySearchSnippetMax] + "..."
-		}
+	scored, err := searchChunksWithBleve(allChunks, query, maxResults)
+	if err != nil {
+		return nil, nil
 	}
 	return scored, nil
 }
@@ -417,5 +300,82 @@ func requireString(params map[string]interface{}, key string) (string, error) {
 		return "", fmt.Errorf("%s must be a string: %w", key, err)
 	}
 	return s, nil
+}
+
+type memorySearchDoc struct {
+	ID        string `json:"id"`
+	Path      string `json:"path"`
+	StartLine int    `json:"start_line"`
+	EndLine   int    `json:"end_line"`
+	Snippet   string `json:"snippet"`
+	Content   string `json:"content"`
+}
+
+func searchChunksWithBleve(chunks []MemoryChunk, query string, maxResults int) ([]MemoryChunk, error) {
+	if len(chunks) == 0 {
+		return nil, nil
+	}
+	mapping := bleve.NewIndexMapping()
+	mapping.DefaultAnalyzer = "cjk"
+	index, err := bleve.NewMemOnly(mapping)
+	if err != nil {
+		return nil, err
+	}
+	for i, c := range chunks {
+		doc := memorySearchDoc{
+			ID:        fmt.Sprintf("chunk-%d", i),
+			Path:      c.Path,
+			StartLine: c.StartLine,
+			EndLine:   c.EndLine,
+			Snippet:   c.Snippet,
+			Content:   c.Snippet,
+		}
+		if err := index.Index(doc.ID, doc); err != nil {
+			return nil, err
+		}
+	}
+
+	q := bleve.NewMatchQuery(query)
+	q.SetField("content")
+	req := bleve.NewSearchRequestOptions(q, maxResults, 0, false)
+	req.Fields = []string{"path", "start_line", "end_line", "snippet"}
+	res, err := index.Search(req)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]MemoryChunk, 0, len(res.Hits))
+	for _, hit := range res.Hits {
+		path, _ := hit.Fields["path"].(string)
+		snippet, _ := hit.Fields["snippet"].(string)
+		startLine := toIntField(hit.Fields["start_line"])
+		endLine := toIntField(hit.Fields["end_line"])
+		if path == "" || snippet == "" {
+			continue
+		}
+		if len(snippet) > memorySearchSnippetMax {
+			snippet = snippet[:memorySearchSnippetMax] + "..."
+		}
+		out = append(out, MemoryChunk{
+			Path:      path,
+			StartLine: startLine,
+			EndLine:   endLine,
+			Snippet:   snippet,
+			Score:     hit.Score,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out, nil
+}
+
+func toIntField(v interface{}) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	default:
+		return 0
+	}
 }
 

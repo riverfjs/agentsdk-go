@@ -152,54 +152,20 @@ func TestMemorySearchMaxResults(t *testing.T) {
 	}
 }
 
-// ── tokenize ──────────────────────────────────────────────────────────────────
-
-func TestTokenize(t *testing.T) {
-	cases := []struct {
-		input string
-		want  []string
-	}{
-		{"hello world", []string{"hello", "world"}},
-		{"Go-lang", []string{"go-lang"}},
-		{"foo123 bar", []string{"foo123", "bar"}},
-		{"  spaces  ", []string{"spaces"}},
-		{"", nil},
-		{"!@#$%", nil},
+func TestSearchChunksWithBleve(t *testing.T) {
+	chunks := []MemoryChunk{
+		{Path: "memory/a.md", StartLine: 1, EndLine: 3, Snippet: "permissions dsl and sandbox policy"},
+		{Path: "memory/b.md", StartLine: 4, EndLine: 6, Snippet: "unrelated weather content"},
 	}
-	for _, tc := range cases {
-		got := tokenize(tc.input)
-		if len(got) != len(tc.want) {
-			t.Errorf("tokenize(%q): got %v, want %v", tc.input, got, tc.want)
-			continue
-		}
-		for i := range tc.want {
-			if got[i] != tc.want[i] {
-				t.Errorf("tokenize(%q)[%d]: got %q, want %q", tc.input, i, got[i], tc.want[i])
-			}
-		}
+	results, err := searchChunksWithBleve(chunks, "permission sandbox", 5)
+	if err != nil {
+		t.Fatalf("searchChunksWithBleve error: %v", err)
 	}
-}
-
-// ── scoreChunk ────────────────────────────────────────────────────────────────
-
-func TestScoreChunk(t *testing.T) {
-	tokens := tokenize("myclaw memory")
-
-	// chunk containing the terms should score > 0
-	score := scoreChunk("myclaw is a memory management system", tokens)
-	if score <= 0 {
-		t.Fatalf("expected positive score, got %f", score)
+	if len(results) == 0 {
+		t.Fatal("expected at least one result")
 	}
-
-	// unrelated chunk should score 0
-	zero := scoreChunk("completely unrelated content here", tokens)
-	if zero != 0 {
-		t.Fatalf("expected zero score for unrelated chunk, got %f", zero)
-	}
-
-	// empty tokens → zero
-	if s := scoreChunk("myclaw memory", nil); s != 0 {
-		t.Fatalf("expected 0 for empty tokens, got %f", s)
+	if results[0].Path != "memory/a.md" {
+		t.Fatalf("expected memory/a.md first, got %s", results[0].Path)
 	}
 }
 
@@ -241,37 +207,6 @@ func TestSearchMemoryNoFiles(t *testing.T) {
 	}
 	if results != nil {
 		t.Fatal("expected nil when no memory files exist")
-	}
-}
-
-// ── CJK tokenization ─────────────────────────────────────────────────────────
-
-func TestTokenizeCJK(t *testing.T) {
-	cases := []struct {
-		input string
-		want  []string
-	}{
-		// Pure Chinese — each character is its own token
-		{"你好", []string{"你", "好"}},
-		// Mixed Chinese + English
-		{"flight-monitor 监控", []string{"flight-monitor", "监", "控"}},
-		// Chinese with punctuation (punctuation is separator)
-		{"查机票，选航班", []string{"查", "机", "票", "选", "航", "班"}},
-		// Only ASCII punctuation — no tokens
-		{"!!! ???", nil},
-	}
-	for _, tc := range cases {
-		got := tokenize(tc.input)
-		if len(got) != len(tc.want) {
-			t.Errorf("tokenize(%q): got %v (len=%d), want %v (len=%d)",
-				tc.input, got, len(got), tc.want, len(tc.want))
-			continue
-		}
-		for i := range tc.want {
-			if got[i] != tc.want[i] {
-				t.Errorf("tokenize(%q)[%d]: got %q, want %q", tc.input, i, got[i], tc.want[i])
-			}
-		}
 	}
 }
 

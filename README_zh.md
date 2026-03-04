@@ -10,7 +10,7 @@ agentsdk-go 是一个模块化的 Agent 开发框架，实现 Claude Code 风格
 
 ### 依赖
 
-- 外部依赖：anthropic-sdk-go、fsnotify、gopkg.in/yaml.v3、google/uuid、golang.org/x/mod、golang.org/x/net
+- 外部依赖：anthropic-sdk-go、bleve/v2、fsnotify
 
 ### 功能概览
 
@@ -365,8 +365,16 @@ SDK 使用 `.claude/` 目录进行配置，与 Claude Code 兼容：
 ```json
 {
   "permissions": {
-    "allow": ["Bash(ls:*)", "Bash(pwd:*)"],
-    "deny": ["Read(.env)", "Read(secrets/**)"]
+    "default": "deny",
+    "dsl": [
+      "allow Bash ls",
+      "allow Bash pwd",
+      "allow Read *",
+      "deny Bash git push --force|--force-with-lease"
+    ],
+    "additionalDirectories": [
+      "/Users/you/.claude
+    ]
   },
   "env": {
     "MY_VAR": "value"
@@ -376,6 +384,11 @@ SDK 使用 `.claude/` 目录进行配置，与 Claude Code 兼容：
   }
 }
 ```
+
+权限说明：
+- `permissions` 仅支持 DSL（旧 `allow/ask/deny` 数组格式已废弃且会报错）。
+- DSL 中工具名区分大小写，并在运行时按已注册工具校验。
+- `permissions.additionalDirectories` 用于扩展内置文件工具白名单，必须使用绝对路径（`~` 不会展开）。
 
 ## HTTP API
 
@@ -486,6 +499,10 @@ SDK 包含以下内置工具：
 - `ask_user_question` - 在执行过程中向用户提问
 - `skill` - 执行 `.claude/skills/` 中的技能
 - `slash_command` - 执行 `.claude/commands/` 中的斜杠命令
+- `memory_search` - 使用 Bleve 检索 `MEMORY.md` 与 `memory/*.md`（默认返回前 3 条，`max_results` 最多 5 条）
+- `memory_get` - 按行读取 memory 文件内容
+- `memory_write` - 写入 memory 记录（today/projects/lessons/path）
+- `list_skills` - 列出 `.claude/skills/` 可用技能
 - `task` - 生成子代理处理复杂任务（仅 CLI/Platform 入口点）
 
 所有内置工具遵循沙箱策略，受路径白名单和命令验证器约束。使用 `EnabledBuiltinTools` 选择性启用工具，或使用 `CustomTools` 注册自定义实现。

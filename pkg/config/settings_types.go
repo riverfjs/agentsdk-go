@@ -36,9 +36,11 @@ type Settings struct {
 
 // PermissionsConfig defines per-tool permission rules.
 type PermissionsConfig struct {
-	Allow                        []string `json:"allow,omitempty"`                        // Rules that auto-allow tool use.
-	Ask                          []string `json:"ask,omitempty"`                          // Rules that require confirmation.
-	Deny                         []string `json:"deny,omitempty"`                         // Rules that block tool use.
+	Allow                        []string `json:"allow,omitempty"`                        // Deprecated legacy matcher list (rejected in v2 DSL mode).
+	Ask                          []string `json:"ask,omitempty"`                          // Deprecated legacy matcher list (rejected in v2 DSL mode).
+	Deny                         []string `json:"deny,omitempty"`                         // Deprecated legacy matcher list (rejected in v2 DSL mode).
+	DSL                          []string `json:"dsl,omitempty"`                          // DSL permission rules, e.g. "allow Bash git status|diff".
+	Default                      string   `json:"default,omitempty"`                      // Default decision when no rule matches: allow|ask|deny.
 	AdditionalDirectories        []string `json:"additionalDirectories,omitempty"`        // Extra working directories Claude may access.
 	DefaultMode                  string   `json:"defaultMode,omitempty"`                  // Default permission mode when opening Claude Code.
 	DisableBypassPermissionsMode string   `json:"disableBypassPermissionsMode,omitempty"` // Set to "disable" to forbid bypassPermissions mode.

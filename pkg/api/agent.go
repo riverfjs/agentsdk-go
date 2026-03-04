@@ -172,6 +172,9 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	if err := registerMCPServers(ctx, registry, sbox, mcpServers); err != nil {
 		return nil, err
 	}
+	if err := validatePermissionDSLToolsAgainstRegistry(settings, registry); err != nil {
+		return nil, err
+	}
 	executor := tool.NewExecutor(registry, sbox).
 		WithOutputPersister(tool.NewOutputPersister()).
 		WithLogger(log)
@@ -838,19 +841,61 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 		if maxR <= 0 {
 			maxR = 3
 		}
-		if results, _ := toolbuiltin.SearchMemory(rt.opts.ProjectRoot, rawUserPrompt, maxR); len(results) > 0 {
-			var sb strings.Builder
-			sb.WriteString("<relevant-memories>\n")
-			sb.WriteString("The following memories may be relevant to this conversation:\n")
-			for _, r := range results {
-				sb.WriteString("- ")
-				sb.WriteString(r.Snippet)
-				sb.WriteByte('\n')
+		rt.logger.Debugf(
+			"[agentsdk] auto-recall: start session=%s request=%s max_results=%d prompt_chars=%d project_root=%s",
+			normalized.SessionID,
+			normalized.RequestID,
+			maxR,
+			len(rawUserPrompt),
+			rt.opts.ProjectRoot,
+		)
+		results, recallErr := toolbuiltin.SearchMemory(rt.opts.ProjectRoot, rawUserPrompt, maxR)
+		recallSource := "raw"
+		if recallErr != nil {
+			rt.logger.Warnf(
+				"[agentsdk] auto-recall: search failed session=%s request=%s err=%v",
+				normalized.SessionID,
+				normalized.RequestID,
+				recallErr,
+			)
+		}
+		if recallErr == nil && len(results) == 0 {
+			if fallbackQuery := buildAutoRecallFallbackQuery(rawUserPrompt); fallbackQuery != "" {
+				rt.logger.Debugf(
+					"[agentsdk] auto-recall: fallback-search session=%s request=%s query_chars=%d",
+					normalized.SessionID,
+					normalized.RequestID,
+					len(fallbackQuery),
+				)
+				if fbResults, fbErr := toolbuiltin.SearchMemory(rt.opts.ProjectRoot, fallbackQuery, maxR); fbErr != nil {
+					rt.logger.Warnf(
+						"[agentsdk] auto-recall: fallback search failed session=%s request=%s err=%v",
+						normalized.SessionID,
+						normalized.RequestID,
+						fbErr,
+					)
+				} else {
+					results = fbResults
+					recallSource = "fallback"
+				}
 			}
-			sb.WriteString("</relevant-memories>\n\n")
-			sb.WriteString(prompt)
-			prompt = sb.String()
-			rt.logger.Debugf("[agentsdk] auto-recall: injected %d memory snippet(s) into prompt", len(results))
+		}
+		if recallErr == nil && len(results) > 0 {
+			injectedBlock := buildAutoRecallInjectedBlock(results)
+			prompt = injectedBlock + prompt
+			rt.logger.Debugf(
+				"[agentsdk] auto-recall: injected session=%s request=%s snippets=%d source=%s",
+				normalized.SessionID,
+				normalized.RequestID,
+				len(results),
+				recallSource,
+			)
+		} else if recallErr == nil {
+			rt.logger.Debugf(
+				"[agentsdk] auto-recall: no-match session=%s request=%s",
+				normalized.SessionID,
+				normalized.RequestID,
+			)
 		}
 	}
 
@@ -2137,7 +2182,7 @@ func registerTools(registry *tool.Registry, opts Options, settings *config.Setti
 			cmdExec = commands.NewExecutor()
 		}
 
-		factories := builtinToolFactories(opts.ProjectRoot, sandboxDisabled, entry, settings, skReg, cmdExec)
+		factories := builtinToolFactories(opts.ProjectRoot, sandboxDisabled, entry, settings, skReg, cmdExec, opts.Sandbox.AllowedPaths)
 		names := builtinOrder(entry)
 		selectedNames := filterBuiltinNames(opts.EnabledBuiltinTools, names)
 		for _, name := range selectedNames {
@@ -2209,7 +2254,7 @@ func registerTools(registry *tool.Registry, opts Options, settings *config.Setti
 	return taskTool, nil
 }
 
-func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, settings *config.Settings, skReg *skills.Registry, cmdExec *commands.Executor) map[string]func() tool.Tool {
+func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, settings *config.Settings, skReg *skills.Registry, cmdExec *commands.Executor, allowedPaths []string) map[string]func() tool.Tool {
 	factories := map[string]func() tool.Tool{}
 
 	var (
@@ -2228,12 +2273,17 @@ func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, s
 		toolbuiltin.DefaultAsyncTaskManager().SetMaxOutputLen(asyncThresholdBytes)
 	}
 
+	sharedSandbox := (*security.Sandbox)(nil)
+	if !sandboxDisabled {
+		sharedSandbox = newBuiltinToolSandbox(root, settings, allowedPaths)
+	}
+
 	bashCtor := func() tool.Tool {
 		var bash *toolbuiltin.BashTool
 		if sandboxDisabled {
 			bash = toolbuiltin.NewBashToolWithSandbox(root, security.NewDisabledSandbox())
 		} else {
-			bash = toolbuiltin.NewBashToolWithRoot(root)
+			bash = toolbuiltin.NewBashToolWithSandbox(root, sharedSandbox)
 		}
 		if syncThresholdBytes > 0 {
 			bash.SetOutputThresholdBytes(syncThresholdBytes)
@@ -2248,19 +2298,19 @@ func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, s
 		if sandboxDisabled {
 			return toolbuiltin.NewReadToolWithSandbox(root, security.NewDisabledSandbox())
 		}
-		return toolbuiltin.NewReadToolWithRoot(root)
+		return toolbuiltin.NewReadToolWithSandbox(root, sharedSandbox)
 	}
 	writeCtor := func() tool.Tool {
 		if sandboxDisabled {
 			return toolbuiltin.NewWriteToolWithSandbox(root, security.NewDisabledSandbox())
 		}
-		return toolbuiltin.NewWriteToolWithRoot(root)
+		return toolbuiltin.NewWriteToolWithSandbox(root, sharedSandbox)
 	}
 	editCtor := func() tool.Tool {
 		if sandboxDisabled {
 			return toolbuiltin.NewEditToolWithSandbox(root, security.NewDisabledSandbox())
 		}
-		return toolbuiltin.NewEditToolWithRoot(root)
+		return toolbuiltin.NewEditToolWithSandbox(root, sharedSandbox)
 	}
 
 	respectGitignore := true
@@ -2273,7 +2323,7 @@ func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, s
 			grep.SetRespectGitignore(respectGitignore)
 			return grep
 		}
-		grep := toolbuiltin.NewGrepToolWithRoot(root)
+		grep := toolbuiltin.NewGrepToolWithSandbox(root, sharedSandbox)
 		grep.SetRespectGitignore(respectGitignore)
 		return grep
 	}
@@ -2283,7 +2333,7 @@ func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, s
 			glob.SetRespectGitignore(respectGitignore)
 			return glob
 		}
-		glob := toolbuiltin.NewGlobToolWithRoot(root)
+		glob := toolbuiltin.NewGlobToolWithSandbox(root, sharedSandbox)
 		glob.SetRespectGitignore(respectGitignore)
 		return glob
 	}
@@ -2318,6 +2368,32 @@ func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, s
 	}
 
 	return factories
+}
+
+func newBuiltinToolSandbox(root string, settings *config.Settings, allowedPaths []string) *security.Sandbox {
+	sb := security.NewSandbox(root)
+	add := func(path string) {
+		clean := strings.TrimSpace(path)
+		if clean == "" {
+			return
+		}
+		if abs, err := filepath.Abs(clean); err == nil {
+			clean = abs
+		}
+		sb.Allow(clean)
+		if resolved, err := filepath.EvalSymlinks(clean); err == nil && strings.TrimSpace(resolved) != "" {
+			sb.Allow(resolved)
+		}
+	}
+	if settings != nil && settings.Permissions != nil {
+		for _, p := range settings.Permissions.AdditionalDirectories {
+			add(p)
+		}
+	}
+	for _, p := range allowedPaths {
+		add(p)
+	}
+	return sb
 }
 
 func builtinOrder(entry EntryPoint) []string {
@@ -2557,6 +2633,47 @@ func buildSystemContextSnippet(projectRoot string, now time.Time, primaryModel s
 		sections = append(sections, skillsSnippet)
 	}
 	return strings.Join(sections, "\n")
+}
+
+func buildAutoRecallFallbackQuery(raw string) string {
+	q := strings.TrimSpace(raw)
+	if q == "" {
+		return ""
+	}
+	lower := strings.ToLower(q)
+	hotwords := []string{
+		"home", "workspace", "path", "directory", "root",
+		"路径", "目录", "工作目录", "根目录", "哪里", "在哪",
+	}
+	matched := false
+	for _, w := range hotwords {
+		if strings.Contains(lower, w) || strings.Contains(q, w) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return ""
+	}
+	anchors := []string{
+		"home directory", "home path", "workspace directory", "workspace path",
+		"agent home", "working directory", "~/.aevitas", "~/.aevitas/workspace",
+		"home 路径", "工作目录", "workspace 目录",
+	}
+	return q + " " + strings.Join(anchors, " ")
+}
+
+func buildAutoRecallInjectedBlock(results []toolbuiltin.MemoryChunk) string {
+	var sb strings.Builder
+	sb.WriteString("<relevant-memories>\n")
+	sb.WriteString("The following memories may be relevant to this conversation:\n")
+	for _, r := range results {
+		sb.WriteString("- ")
+		sb.WriteString(r.Snippet)
+		sb.WriteByte('\n')
+	}
+	sb.WriteString("</relevant-memories>\n\n")
+	return sb.String()
 }
 
 var promptTagEscaper = strings.NewReplacer(

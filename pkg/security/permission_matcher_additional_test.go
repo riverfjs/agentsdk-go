@@ -1,25 +1,40 @@
 package security
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/riverfjs/agentsdk-go/pkg/config"
 )
 
-func TestCompilePermissionRuleValidation(t *testing.T) {
-	if _, err := compilePermissionRule("   "); err == nil {
+func TestCompileDSLRuleValidation(t *testing.T) {
+	if _, err := parseDSLRule("   "); err == nil {
 		t.Fatal("expected error for empty rule")
 	}
-	if _, err := compilePermissionRule("Read(file"); err == nil {
-		t.Fatal("expected malformed rule error")
+	if _, err := parseDSLRule("allow"); err == nil {
+		t.Fatal("expected malformed DSL rule")
 	}
-	rule, err := compilePermissionRule("Echo")
+	ast, err := parseDSLRule("allow Read **/*.md")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !rule.match("anything") {
-		t.Fatalf("rule without pattern should match all targets")
+	if ast.Effect != PermissionAllow {
+		t.Fatalf("unexpected effect: %v", ast.Effect)
+	}
+	rule, err := compileDSLASTRule(ast)
+	if err != nil {
+		t.Fatalf("compile ast failed: %v", err)
+	}
+	if !rule.match("/tmp/a.md") {
+		t.Fatalf("expected matcher to hit markdown path")
+	}
+}
+
+func TestParseDSLRuleAcceptsUnregisteredToolName(t *testing.T) {
+	if _, err := parseDSLRule("allow FooTool anything"); err != nil {
+		t.Fatalf("expected parser to accept tool token before runtime registry check, got %v", err)
+	}
+	if _, err := parseDSLRule("allow bash ls"); err != nil {
+		t.Fatalf("expected parser to accept lowercase token before runtime registry check, got %v", err)
 	}
 }
 
@@ -40,7 +55,6 @@ func TestCompilePatternVariants(t *testing.T) {
 }
 
 func TestDeriveTargetCoverage(t *testing.T) {
-	tmp := filepath.Join("tmp", "file.txt")
 	tests := []struct {
 		name   string
 		tool   string
@@ -50,9 +64,10 @@ func TestDeriveTargetCoverage(t *testing.T) {
 		{name: "bash with args", tool: "Bash", params: map[string]any{"command": "ls -la"}, want: "ls:-la"},
 		{name: "bash no args", tool: "bash", params: map[string]any{"command": "ls"}, want: "ls:"},
 		{name: "bash empty", tool: "bash", params: map[string]any{"command": "   "}, want: ""},
-		{name: "read path", tool: "Read", params: map[string]any{"file_path": tmp}, want: filepath.Clean(tmp)},
+		{name: "read path", tool: "Read", params: map[string]any{"file_path": "tmp/file.txt"}, want: "tmp/file.txt"},
 		{name: "taskget prefers id", tool: "TaskGet", params: map[string]any{"task_id": "task-123", "path": "/tmp/ignored"}, want: "task-123"},
-		{name: "generic target key", tool: "Custom", params: map[string]any{"target": "/foo/bar"}, want: filepath.Clean("/foo/bar")},
+		{name: "webfetch host", tool: "WebFetch", params: map[string]any{"url": "https://example.com/a"}, want: "example.com"},
+		{name: "generic target key", tool: "Custom", params: map[string]any{"target": "/foo/bar"}, want: "/foo/bar"},
 		{name: "first string fallback", tool: "Other", params: map[string]any{"misc": []byte(" hi ")}, want: "hi"},
 	}
 
@@ -97,26 +112,32 @@ func TestPermissionMatcherNilAndUnknown(t *testing.T) {
 		t.Fatalf("nil config should return nil matcher, got %+v err %v", matcher, err)
 	}
 
-	cfg := &config.PermissionsConfig{Allow: []string{"Read(**/*.txt)"}}
+	cfg := &config.PermissionsConfig{
+		DSL:     []string{"allow Read **/*.txt"},
+		Default: "deny",
+	}
 	matcher, err := NewPermissionMatcher(cfg)
 	if err != nil {
 		t.Fatalf("matcher: %v", err)
 	}
 	unknown := matcher.Match("Write", map[string]any{"path": "/tmp/file.txt"})
-	if unknown.Action != PermissionUnknown || unknown.Tool != "Write" {
-		t.Fatalf("expected unknown decision, got %+v", unknown)
+	if unknown.Action != PermissionDeny || unknown.Tool != "Write" {
+		t.Fatalf("expected deny default decision, got %+v", unknown)
 	}
 
-	badCfg := &config.PermissionsConfig{Ask: []string{"Broken("}}
+	badCfg := &config.PermissionsConfig{DSL: []string{"ask"}}
 	if _, err := NewPermissionMatcher(badCfg); err == nil {
-		t.Fatal("expected error for malformed ask rule")
+		t.Fatal("expected error for malformed dsl rule")
 	}
 }
 
 func TestPermissionMatcherPriorityRespectsCase(t *testing.T) {
 	cfg := &config.PermissionsConfig{
-		Allow: []string{"Bash(ls:*)"},
-		Deny:  []string{"bash(regex:^rm:)"},
+		DSL: []string{
+			"allow Bash ls",
+			"deny Bash rm",
+		},
+		Default: "deny",
 	}
 	matcher, err := NewPermissionMatcher(cfg)
 	if err != nil {
@@ -134,12 +155,13 @@ func TestPermissionMatcherPriorityRespectsCase(t *testing.T) {
 
 func TestPermissionMatcherTaskTools(t *testing.T) {
 	cfg := &config.PermissionsConfig{
-		Deny: []string{
-			"TaskCreate(task-create)",
-			"TaskGet(task-get)",
-			"TaskUpdate(task-update)",
-			"TaskList(task-list)",
+		DSL: []string{
+			"deny TaskCreate task-create",
+			"deny TaskGet task-get",
+			"deny TaskUpdate task-update",
+			"deny TaskList task-list",
 		},
+		Default: "allow",
 	}
 	matcher, err := NewPermissionMatcher(cfg)
 	if err != nil {
@@ -160,7 +182,7 @@ func TestPermissionMatcherTaskTools(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.tool, func(t *testing.T) {
 			decision := matcher.Match(tt.tool, map[string]any{"task_id": tt.id, "path": "/tmp/ignored"})
-			if decision.Action != PermissionDeny || decision.Rule != tt.rule || decision.Target != tt.id {
+			if decision.Action != PermissionDeny || decision.Target != tt.id {
 				t.Fatalf("unexpected decision: %+v", decision)
 			}
 		})

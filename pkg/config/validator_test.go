@@ -20,9 +20,12 @@ func TestValidateSettingsSuccess(t *testing.T) {
 		},
 		Permissions: &PermissionsConfig{
 			DefaultMode: "acceptEdits",
-			Allow:       []string{"Bash(git:*)"},
-			Ask:         []string{"Read(*.go)"},
-			Deny:        []string{"Glob(**/*)"},
+			Default:     "deny",
+			DSL: []string{
+				"allow Bash git status|diff",
+				"ask Read **/*.go",
+				"deny Glob **/*",
+			},
 		},
 		Hooks: &HooksConfig{
 			PreToolUse: []HookMatcherEntry{
@@ -75,6 +78,7 @@ func TestValidateSettingsAggregatesErrors(t *testing.T) {
 		Permissions: &PermissionsConfig{
 			DefaultMode: "invalid",
 			Allow:       []string{"tool()"},
+			DSL:         []string{"bad-rule"},
 		},
 		Hooks: &HooksConfig{
 			PreToolUse: []HookMatcherEntry{
@@ -98,7 +102,7 @@ func TestValidateSettingsAggregatesErrors(t *testing.T) {
 	msg := err.Error()
 	require.Contains(t, msg, "model is required")
 	require.Contains(t, msg, "permissions.defaultMode")
-	require.Contains(t, msg, "permissions.allow[0]")
+	require.Contains(t, msg, "permissions.allow/ask/deny are no longer supported")
 	require.Contains(t, msg, "hooks.PreToolUse")
 	require.Contains(t, msg, "sandbox.network.httpProxyPort")
 	require.Contains(t, msg, "sandbox.network.socksProxyPort")
@@ -119,6 +123,18 @@ func TestValidatePermissionRule(t *testing.T) {
 	for _, rule := range invalid {
 		require.Error(t, validatePermissionRule(rule), "rule %q should be invalid", rule)
 	}
+}
+
+func TestValidateSettings_DSLSyntaxNotCheckedInConfigLayer(t *testing.T) {
+	s := &Settings{
+		Model: "claude-3",
+		Permissions: &PermissionsConfig{
+			DefaultMode: "acceptEdits",
+			Default:     "deny",
+			DSL:         []string{"bad-rule"},
+		},
+	}
+	require.NoError(t, ValidateSettings(s))
 }
 
 func TestValidateToolName_Boundaries(t *testing.T) {

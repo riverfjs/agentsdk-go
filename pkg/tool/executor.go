@@ -61,8 +61,14 @@ func (e *Executor) Execute(ctx context.Context, call Call) (*CallResult, error) 
 		}
 		switch decision.Action {
 		case security.PermissionDeny:
+			if e.logger != nil {
+				e.logger.Warnf("[tool] %s ✗ denied by rule %q for %s", call.Name, decision.Rule, decision.Target)
+			}
 			return nil, fmt.Errorf("tool %s denied by rule %q for %s", call.Name, decision.Rule, decision.Target)
 		case security.PermissionAsk:
+			if e.logger != nil {
+				e.logger.Warnf("[tool] %s ? requires approval (rule %q for %s)", call.Name, decision.Rule, decision.Target)
+			}
 			return nil, fmt.Errorf("tool %s requires approval (rule %q for %s)", call.Name, decision.Rule, decision.Target)
 		}
 

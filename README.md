@@ -12,7 +12,7 @@ agentsdk-go is a modular agent development framework that implements core Claude
 
 ### Dependencies
 
-- External dependencies: anthropic-sdk-go, fsnotify, gopkg.in/yaml.v3, google/uuid, golang.org/x/mod, golang.org/x/net
+- External dependencies: anthropic-sdk-go, bleve/v2
 
 ## Features
 
@@ -30,7 +30,7 @@ agentsdk-go is a modular agent development framework that implements core Claude
 ### Extended Builtin Tools
 - **`memory_write`**: Unified memory editor with targets `today` (`memory/YYYY-MM-DD.md`), `projects` (`memory/projects.md`), `lessons` (`memory/lessons.md`), or explicit `path` (restricted to `MEMORY.md` and `memory/*.md`).
 - **`memory_get`**: Read specific line ranges from memory files (`MEMORY.md` or `memory/*.md`) after `memory_search` to keep context minimal.
-- **`memory_search`**: Semantic keyword search across `MEMORY.md` + `memory/*.md`, returning ranked snippets with path and line ranges.
+- **`memory_search`**: Bleve-powered search across `MEMORY.md` + `memory/*.md`, returning ranked snippets with path and line ranges (default top 3; `max_results` override capped at 5).
 - **`list_skills`**: List available skills in the workspace `.claude/skills/` directory.
 - **Realtime Progress Events**: Each tool call emits a progress event with the current tool name and parameters (not cumulative).
 - **Web Search Resilience**: `web_search` uses normalized cache keys + short TTL cache and suppresses repeated 401/403/404 failures for a short cooldown.
@@ -422,8 +422,16 @@ Configuration precedence (high → low):
 ```json
 {
   "permissions": {
-    "allow": ["Bash(ls:*)", "Bash(pwd:*)"],
-    "deny": ["Read(.env)", "Read(secrets/**)"]
+    "default": "deny",
+    "dsl": [
+      "allow Bash ls",
+      "allow Bash pwd",
+      "allow Read *",
+      "deny Bash git push --force|--force-with-lease"
+    ],
+    "additionalDirectories": [
+      "/Users/you/.claude
+    ]
   },
   "disallowedTools": ["web_search", "web_fetch"],
   "env": {
@@ -434,6 +442,11 @@ Configuration precedence (high → low):
   }
 }
 ```
+
+Permission notes:
+- `permissions` uses DSL-only (`allow/ask/deny` arrays are deprecated and rejected).
+- Tool names in DSL are case-sensitive and validated against runtime-registered tools.
+- `permissions.additionalDirectories` extends built-in file-tool allowlist and must use absolute paths (`~` is not expanded).
 
 ### Token Statistics & Auto Compact
 
@@ -579,6 +592,10 @@ The SDK ships with the following built-in tools:
 - `ask_user_question` - Ask the user questions during execution
 - `skill` - Execute skills from `.claude/skills/`
 - `slash_command` - Execute slash commands from `.claude/commands/`
+- `memory_search` - Search memory files with Bleve ranking (default top 3, max 5)
+- `memory_get` - Read selected memory file ranges after `memory_search`
+- `memory_write` - Write structured memory updates to `today/projects/lessons/path`
+- `list_skills` - List available skills from `.claude/skills/`
 - `task` - Spawn subagents for complex tasks (CLI/Platform entrypoints only)
 
 All built-in tools obey sandbox policies and are constrained by the path whitelist and command validator. Use `EnabledBuiltinTools` to selectively enable tools or `CustomTools` to register your own implementations.

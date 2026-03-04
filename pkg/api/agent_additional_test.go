@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,6 +81,40 @@ func TestRunStreamProducesEvents(t *testing.T) {
 	messageDeltaIdx := find(EventMessageDelta)
 	if !(contentStopIdx < messageDeltaIdx && messageDeltaIdx < messageStopIdx) {
 		t.Fatalf("expected message_delta between content_block_stop and message_stop: %v", types)
+	}
+}
+
+func TestNewRejectsPermissionDSLUnknownRegisteredTool(t *testing.T) {
+	root := newClaudeProjectWithSettings(t, `{
+		"model":"claude-3-opus",
+		"permissions":{
+			"default":"deny",
+			"dsl":["allow bash ls"]
+		}
+	}`)
+	_, err := New(context.Background(), Options{ProjectRoot: root, Model: &stubModel{}})
+	if err == nil {
+		t.Fatal("expected runtime init to fail for unregistered DSL tool name")
+	}
+	if !strings.Contains(err.Error(), `tool "bash" is not registered`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNewRejectsPermissionDSLSyntaxAtRuntimeValidation(t *testing.T) {
+	root := newClaudeProjectWithSettings(t, `{
+		"model":"claude-3-opus",
+		"permissions":{
+			"default":"deny",
+			"dsl":["maybe Bash ls"]
+		}
+	}`)
+	_, err := New(context.Background(), Options{ProjectRoot: root, Model: &stubModel{}})
+	if err == nil {
+		t.Fatal("expected runtime init to fail for invalid DSL syntax")
+	}
+	if !strings.Contains(err.Error(), `permissions.dsl[0]: unknown effect`) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

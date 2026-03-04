@@ -83,6 +83,10 @@ func mergePermissions(lower, higher *PermissionsConfig) *PermissionsConfig {
 	out.Allow = mergeStringSlices(lower.Allow, higher.Allow)
 	out.Ask = mergeStringSlices(lower.Ask, higher.Ask)
 	out.Deny = mergeStringSlices(lower.Deny, higher.Deny)
+	out.DSL = mergeStringSlices(lower.DSL, higher.DSL)
+	if higher.Default != "" {
+		out.Default = higher.Default
+	}
 	out.AdditionalDirectories = mergeStringSlices(lower.AdditionalDirectories, higher.AdditionalDirectories)
 	if higher.DefaultMode != "" {
 		out.DefaultMode = higher.DefaultMode
@@ -391,6 +395,7 @@ func clonePermissions(src *PermissionsConfig) *PermissionsConfig {
 	out.Allow = mergeStringSlices(nil, src.Allow)
 	out.Ask = mergeStringSlices(nil, src.Ask)
 	out.Deny = mergeStringSlices(nil, src.Deny)
+	out.DSL = mergeStringSlices(nil, src.DSL)
 	out.AdditionalDirectories = mergeStringSlices(nil, src.AdditionalDirectories)
 	return &out
 }
