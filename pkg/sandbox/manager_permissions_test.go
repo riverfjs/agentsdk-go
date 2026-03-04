@@ -15,7 +15,7 @@ func TestManagerCheckToolPermissionLoadsAndAudits(t *testing.T) {
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	settings := `{"permissions":{"deny":["Bash(rm:*)"],"allow":["Bash(ls:*)"]}}`
+	settings := `{"permissions":{"default":"allow","dsl":["deny Bash rm","allow Bash ls"]}}`
 	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(settings), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestManagerCheckToolPermissionCachesErrors(t *testing.T) {
 	}
 
 	// Even after fixing the file, the cached error should be returned due to permOnce.
-	good := `{"permissions":{"allow":["Bash(ls:*)"]}}`
+	good := `{"permissions":{"default":"allow","dsl":["allow Bash ls"]}}`
 	if err := os.WriteFile(settingsPath, []byte(good), 0o600); err != nil {
 		t.Fatalf("write good settings: %v", err)
 	}

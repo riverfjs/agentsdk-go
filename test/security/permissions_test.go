@@ -35,8 +35,8 @@ func TestPermissionsIntegration(t *testing.T) {
 	}
 	settings := map[string]any{
 		"permissions": map[string]any{
-			"deny":  []string{"Bash(ls:*)"},
-			"allow": []string{"Bash(printf:*)"},
+			"default": "allow",
+			"dsl":     []string{"deny Bash ls", "allow Bash printf"},
 		},
 	}
 	data, err := json.Marshal(settings)

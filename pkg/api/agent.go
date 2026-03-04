@@ -712,7 +712,15 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 		if att.FilePath == "" {
 			continue
 		}
-		attType := resolveAttachmentType(att.Type, att.MimeType, att.FilePath)
+		attType := strings.ToLower(strings.TrimSpace(att.Type))
+		switch attType {
+		case "image", "audio", "file":
+		default:
+			attType = ""
+		}
+		if attType == "" {
+			continue
+		}
 		data, mimeType, err := loadAttachmentAsBase64(att.FilePath, att.MimeType, attType)
 		if err != nil {
 			rt.logger.Warnf("failed to load attachment %s: %v", att.FilePath, err)
@@ -2560,11 +2568,6 @@ func loadAttachmentAsBase64(filePath, mimeType, attachmentType string) (string, 
 		return "", "", fmt.Errorf("read file: %w", err)
 	}
 
-	attachmentType = strings.ToLower(strings.TrimSpace(attachmentType))
-	if attachmentType == "" {
-		attachmentType = "image"
-	}
-
 	// Auto-detect MIME type if not provided
 	if mimeType == "" {
 		mimeType = DetectAttachmentMIME(attachmentType, filePath)
@@ -2572,10 +2575,6 @@ func loadAttachmentAsBase64(filePath, mimeType, attachmentType string) (string, 
 
 	encoded := base64.StdEncoding.EncodeToString(data)
 	return encoded, mimeType, nil
-}
-
-func resolveAttachmentType(rawType, mimeType, filePath string) string {
-	return DetectAttachmentType(rawType, mimeType, filePath)
 }
 
 type lastUsedModelReader interface {

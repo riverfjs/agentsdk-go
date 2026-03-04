@@ -528,11 +528,11 @@ func TestAsyncHookFireAndForget(t *testing.T) {
 	if len(results) != 0 {
 		t.Fatalf("expected 0 results for async, got %d", len(results))
 	}
-	// Wait for async to complete
-	time.Sleep(200 * time.Millisecond)
-	if _, err := os.Stat(marker); os.IsNotExist(err) {
-		t.Fatal("async hook did not execute")
-	}
+	// Wait for async to complete with bounded retry to avoid flakes.
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(marker)
+		return err == nil
+	}, 2*time.Second, 20*time.Millisecond, "async hook did not execute")
 }
 
 func TestOnceHookExecutesOnlyOnce(t *testing.T) {
